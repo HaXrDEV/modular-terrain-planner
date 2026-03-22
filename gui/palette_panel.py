@@ -88,6 +88,22 @@ class PalettePanel(QWidget):
                 self._tabs.setCurrentIndex(i)
                 return
 
+    def clear_all_tabs(self) -> None:
+        """Remove all folder tabs and reset selection state."""
+        self._tabs.clear()
+        self._selected = None
+        self._preview.set_tile(None)
+        self._info_label.setText("No tile selected")
+        self.tile_selected.emit(None)
+
+    def folder_for_tab(self, index: int) -> Optional[str]:
+        """Return the folder path stored in the tab at *index*, or None."""
+        return self._tabs.tabBar().tabData(index)
+
+    def tab_count(self) -> int:
+        """Return the number of open folder tabs."""
+        return self._tabs.count()
+
     def selected_definition(self) -> Optional[TileDefinition]:
         return self._selected
 

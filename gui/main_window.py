@@ -342,6 +342,7 @@ class MainWindow(QMainWindow):
         self._selected_definition = defn
         self._pending_rotation = 0
         self._view.set_pending_tile(defn, 0)
+        self._view.setFocus()
         self._update_status()
 
     def _on_tile_placed(self, gx: int, gy: int) -> None:

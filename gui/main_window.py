@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Dict, List, Optional
 
 from PyQt5.QtWidgets import (
     QMainWindow, QSplitter, QFileDialog, QMessageBox, QStatusBar,
@@ -25,6 +25,12 @@ class MainWindow(QMainWindow):
         self._selected_definition: Optional[TileDefinition] = None
         self._pending_rotation: int = 0
 
+        # Multi-folder tracking
+        # stl_path → TileDefinition; never removed so placed tiles keep their refs
+        self._all_definitions: Dict[str, TileDefinition] = {}
+        # folder path → list of stl_paths from that folder
+        self._loaded_folders: Dict[str, List[str]] = {}
+
         # Widgets
         self._view = GLGridView(self._model)
         self._palette = PalettePanel()
@@ -43,6 +49,7 @@ class MainWindow(QMainWindow):
         self._palette.tile_selected.connect(self._on_tile_selected)
         self._palette.load_folder_clicked.connect(self._on_load_folder)
         self._palette.export_clicked.connect(self._on_export)
+        self._palette.tab_closed.connect(self._on_tab_closed)
 
         self._view.tile_place_requested.connect(self._on_tile_placed)
         self._view.tile_remove_requested.connect(self._on_tile_removed)
@@ -57,12 +64,27 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "Select STL folder")
         if not folder:
             return
+
+        # Switch to existing tab if already loaded
+        if folder in self._loaded_folders:
+            self._palette.focus_folder_tab(folder)
+            return
+
         definitions = load_stl_folder(folder)
         if not definitions:
             QMessageBox.warning(self, "No STL files", f"No .stl files found in:\n{folder}")
             return
-        self._palette.populate(definitions)
-        self._view.load_definitions(definitions)
+
+        # Register truly new definitions and upload only those to GL
+        new_defs = [d for d in definitions if d.stl_path not in self._all_definitions]
+        for d in new_defs:
+            self._all_definitions[d.stl_path] = d
+        self._loaded_folders[folder] = [d.stl_path for d in definitions]
+
+        if new_defs:
+            self._view.add_definitions(new_defs)
+
+        self._palette.add_folder_tab(folder, definitions)
         self._update_status()
 
     def _on_tile_selected(self, defn: Optional[TileDefinition]) -> None:
@@ -92,6 +114,13 @@ class MainWindow(QMainWindow):
     def _on_rotate(self) -> None:
         self._pending_rotation = (self._pending_rotation + 90) % 360
         self._view.set_pending_tile(self._selected_definition, self._pending_rotation)
+        self._update_status()
+
+    def _on_tab_closed(self, folder_path: str) -> None:
+        # Remove from loaded-folders registry so the folder can be re-loaded later.
+        # _all_definitions is intentionally NOT modified: placed tiles still hold
+        # Python references to TileDefinition objects and VBOs remain valid.
+        self._loaded_folders.pop(folder_path, None)
         self._update_status()
 
     def _on_export(self) -> None:

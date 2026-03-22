@@ -44,39 +44,15 @@ except ImportError:
 from models.grid_model import GridModel
 from models.placed_tile import PlacedTile
 from models.tile_definition import TileDefinition
+from gui.gl_helpers import (
+    MESH_VERT as _MESH_VERT, MESH_FRAG as _MESH_FRAG,
+    build_vdata as _build_vdata, upload_geometry as _upload_geometry,
+    build_program as _build_program_fn, compile_shader as _compile_fn,
+)
 
 # ---------------------------------------------------------------------------
-# Shaders
+# Flat shaders (grid / ground plane only — not shared with preview widget)
 # ---------------------------------------------------------------------------
-
-_MESH_VERT = """\
-#version 330 core
-layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec3 aNorm;
-uniform mat4 uMVP;
-uniform vec3 uNormScale;
-out vec3 vNorm;
-void main() {
-    gl_Position = uMVP * vec4(aPos, 1.0);
-    vNorm = normalize(aNorm * uNormScale);
-}
-"""
-
-_MESH_FRAG = """\
-#version 330 core
-in vec3 vNorm;
-uniform vec3 uColor;
-uniform float uAlpha;
-out vec4 FragColor;
-void main() {
-    vec3 n = normalize(vNorm);
-    float key  = max(dot(n, normalize(vec3(-0.3, -0.5, 1.0))), 0.0) * 0.60;
-    float fill = max(dot(n, normalize(vec3( 0.8,  0.4, 0.3))), 0.0) * 0.25;
-    float rim  = max(dot(n, normalize(vec3( 0.2,  0.9,-0.3))), 0.0) * 0.10;
-    float i = clamp(0.20 + key + fill + rim, 0.0, 1.0);
-    FragColor = vec4(uColor * i, uAlpha);
-}
-"""
 
 _FLAT_VERT = """\
 #version 330 core
@@ -91,62 +67,6 @@ uniform vec4 uColor;
 out vec4 FragColor;
 void main() { FragColor = uColor; }
 """
-
-# ---------------------------------------------------------------------------
-# CPU-side geometry helpers
-# ---------------------------------------------------------------------------
-
-def _build_vdata(triangles: np.ndarray, rotation: int = 0) -> np.ndarray:
-    """
-    Build interleaved (pos xyz, norm xyz) float32 VBO data from a (N, 3, 3) array.
-
-    Applies Z-axis rotation around (0.5, 0.5) in XY, computes flat per-face
-    normals via cross product, and returns a flat (N*3*6,) float32 array.
-    """
-    tris = triangles.copy()  # (N, 3, 3)
-
-    if rotation != 0:
-        cx = tris[:, :, 0] - 0.5
-        cy = tris[:, :, 1] - 0.5
-        if rotation == 90:
-            tris[:, :, 0] = 0.5 - cy
-            tris[:, :, 1] = 0.5 + cx
-        elif rotation == 180:
-            tris[:, :, 0] = 1.0 - tris[:, :, 0]
-            tris[:, :, 1] = 1.0 - tris[:, :, 1]
-        else:  # 270
-            tris[:, :, 0] = 0.5 + cy
-            tris[:, :, 1] = 0.5 - cx
-
-    v0, v1, v2 = tris[:, 0], tris[:, 1], tris[:, 2]
-    norms = np.cross(v1 - v0, v2 - v0)          # (N, 3) flat normals
-    lengths = np.linalg.norm(norms, axis=1, keepdims=True)
-    degen = (lengths < 1e-12).squeeze(axis=1)
-    lengths = np.where(lengths < 1e-12, 1.0, lengths)
-    norms /= lengths
-    norms[degen] = [0.0, 0.0, 1.0]
-
-    # Expand normals to per-vertex and interleave with positions: (N, 3, 6)
-    norms_exp = np.repeat(norms[:, np.newaxis, :], 3, axis=1)
-    combined = np.concatenate([tris, norms_exp], axis=2)  # (N, 3, 6)
-    return combined.reshape(-1).astype(np.float32)
-
-
-def _upload_geometry(vdata: np.ndarray, n_attribs: int = 6) -> Tuple[int, int, int]:
-    """Upload vertex data to GPU. Returns (vao, vbo, n_verts)."""
-    vao = glGenVertexArrays(1)
-    glBindVertexArray(vao)
-    vbo = glGenBuffers(1)
-    glBindBuffer(GL_ARRAY_BUFFER, vbo)
-    glBufferData(GL_ARRAY_BUFFER, vdata.nbytes, vdata, GL_STATIC_DRAW)
-    stride = n_attribs * 4
-    glEnableVertexAttribArray(0)
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(0))
-    if n_attribs > 3:
-        glEnableVertexAttribArray(1)
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, ctypes.c_void_p(12))
-    glBindVertexArray(0)
-    return vao, vbo, len(vdata) // n_attribs
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +142,20 @@ class GLGridView(QOpenGLWidget):
     def refresh(self) -> None:
         self.update()
 
+    def add_definitions(self, definitions: List[TileDefinition]) -> None:
+        """Upload VBOs for new definitions without clearing existing cached tiles."""
+        if not self._ready:
+            existing = getattr(self, '_pending_definitions', [])
+            self._pending_definitions = existing + list(definitions)
+            return
+        self.makeCurrent()
+        for defn in definitions:
+            for rot in (0, 90, 180, 270):
+                if (defn.stl_path, rot) not in self._mesh_cache:
+                    self._upload_tile(defn, rot)
+        self.doneCurrent()
+        self.update()
+
     # ------------------------------------------------------------------
     # QOpenGLWidget lifecycle
     # ------------------------------------------------------------------
@@ -254,7 +188,7 @@ class GLGridView(QOpenGLWidget):
 
             # Upload any definitions that arrived before GL was ready
             if hasattr(self, '_pending_definitions'):
-                self.load_definitions(self._pending_definitions)
+                self.add_definitions(self._pending_definitions)
                 del self._pending_definitions
 
         except Exception as exc:
@@ -533,25 +467,8 @@ class GLGridView(QOpenGLWidget):
     # ------------------------------------------------------------------
 
     def _build_program(self, vert_src: str, frag_src: str) -> int:
-        vs = self._compile(vert_src, GL_VERTEX_SHADER)
-        fs = self._compile(frag_src, GL_FRAGMENT_SHADER)
-        prog = glCreateProgram()
-        glAttachShader(prog, vs)
-        glAttachShader(prog, fs)
-        glLinkProgram(prog)
-        if not glGetProgramiv(prog, GL_LINK_STATUS):
-            err = glGetProgramInfoLog(prog)
-            raise RuntimeError(f"Shader link: {err}")
-        glDeleteShader(vs)
-        glDeleteShader(fs)
-        return prog
+        return _build_program_fn(vert_src, frag_src)
 
     @staticmethod
     def _compile(src: str, kind: int) -> int:
-        s = glCreateShader(kind)
-        glShaderSource(s, src)
-        glCompileShader(s)
-        if not glGetShaderiv(s, GL_COMPILE_STATUS):
-            err = glGetShaderInfoLog(s)
-            raise RuntimeError(f"Shader compile: {err}")
-        return s
+        return _compile_fn(src, kind)

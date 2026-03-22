@@ -8,8 +8,10 @@ A desktop tool for designing tabletop RPG dungeon layouts by placing modular ter
 
 ## Features
 
-- **3D tile preview** — Full OpenGL 3.3 rendering with flat shading and three-point lighting
+- **3D dungeon view** — Full OpenGL 3.3 rendering with flat shading and three-point lighting
 - **Interactive orbit camera** — Rotate, pan, and zoom around the dungeon layout
+- **Tile model previewer** — 3D preview of the selected tile in the palette; orbit and zoom independently
+- **Multi-folder tabs** — Load multiple STL folders as separate tabs and switch between them instantly
 - **Auto-detect tile size** — Reads bounding boxes from STL files and maps them to grid cells (1 cell = 25 mm)
 - **Snap-to-grid placement** — Left-click to place, right-click to remove
 - **Ghost preview** — Hover to see where a tile will land before placing it
@@ -58,17 +60,18 @@ python main.py
 
 ## Usage
 
-1. **Load STL folder** — Click *Load STL Folder* in the palette panel and select a directory containing `.stl` files. Tiles are detected automatically from their bounding boxes.
-2. **Select a tile** — Click a tile in the palette on the left.
-3. **Place tiles** — Move your mouse over the grid and left-click to place. The ghost preview shows a green overlay when placement is valid.
-4. **Rotate** — Press **R** to rotate the pending tile 90° clockwise before placing.
+1. **Load STL folder** — Click *Load STL Folder* in the palette panel and select a directory containing `.stl` files. Each folder opens as a new tab. Load as many folders as you like and switch between them instantly.
+2. **Select a tile** — Click a tile in the list. A 3D preview appears below the list; left-drag the preview to orbit it, scroll to zoom.
+3. **Place tiles** — Move your mouse over the grid and left-click to place. The ghost preview shows where the tile will land.
+4. **Rotate** — Press **R** to rotate the pending tile 90° clockwise. The palette preview updates to match.
 5. **Remove** — Right-click a placed tile to remove it.
-6. **Navigate the camera**:
+6. **Navigate the main camera**:
    - **Right-drag** — Orbit (azimuth / elevation)
    - **Middle-drag** — Pan
    - **Scroll wheel** — Zoom in / out
    - **Home** — Reset camera to default position
-7. **Export** — Click *Export CSV* to save a print list with tile names and quantities.
+7. **Manage folders** — Click the × on a tab to unload that folder. Tiles already placed on the grid remain.
+8. **Export** — Click *Export CSV* to save a print list with tile names and quantities.
 
 ---
 
@@ -86,9 +89,11 @@ python main.py
 ├── stl_loader/
 │   └── loader.py            # STL parsing, bounding-box sizing, voxel decimation
 ├── gui/
-│   ├── main_window.py       # QMainWindow shell, wires palette ↔ grid view
-│   ├── gl_grid_view.py      # QOpenGLWidget: 3D scene, camera, ray-casting
-│   └── palette_panel.py     # Left panel: tile list, load/export buttons
+│   ├── main_window.py         # QMainWindow shell, wires palette ↔ grid view
+│   ├── gl_grid_view.py        # QOpenGLWidget: 3D scene, orbit camera, ray-casting
+│   ├── tile_preview_widget.py # QOpenGLWidget: isolated 3D preview of selected tile
+│   ├── palette_panel.py       # Left panel: folder tabs, tile list, preview, export
+│   └── gl_helpers.py          # Shared GLSL shaders + GPU geometry utilities
 └── export/
     └── csv_exporter.py      # CSV print-list export
 ```

@@ -202,6 +202,7 @@ class MainWindow(QMainWindow):
                 grid_x=rec["grid_x"],
                 grid_y=rec["grid_y"],
                 rotation=rec["rotation"],
+                z_offset=rec["z_offset"],
             )
             self._model.place(pt)
 
@@ -351,6 +352,7 @@ class MainWindow(QMainWindow):
             grid_x=gx,
             grid_y=gy,
             rotation=self._pending_rotation,
+            z_offset=self._model.top_z_at(gx, gy),
         )
         self._model.place(pt)
         self._view.refresh()

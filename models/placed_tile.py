@@ -9,7 +9,8 @@ class PlacedTile:
     definition: TileDefinition
     grid_x: int
     grid_y: int
-    rotation: int  # 0, 90, 180, or 270 degrees
+    rotation: int        # 0, 90, 180, or 270 degrees
+    z_offset: float = 0.0  # Z position in grid-cell units; set when stacking on another tile
 
     @property
     def effective_w(self) -> int:

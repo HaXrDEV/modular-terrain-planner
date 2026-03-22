@@ -11,7 +11,7 @@ looking up each stl_path in the rebuilt definition map.
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-PROJECT_VERSION = 2
+PROJECT_VERSION = 3
 
 
 def save_project(
@@ -43,6 +43,7 @@ def save_project(
                 "grid_x":   pt.grid_x,
                 "grid_y":   pt.grid_y,
                 "rotation": pt.rotation,
+                "z_offset": pt.z_offset,
             }
             for pt in placed_tiles
         ],
@@ -75,6 +76,7 @@ def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]], int, int]:
             "grid_x":   int(t["grid_x"]),
             "grid_y":   int(t["grid_y"]),
             "rotation": int(t["rotation"]),
+            "z_offset": float(t.get("z_offset", 0.0)),
         }
         for t in data.get("tiles", [])
     ]

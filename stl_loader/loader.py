@@ -8,8 +8,8 @@ from models.tile_definition import TileDefinition
 
 
 def mm_to_cells(mm: float) -> int:
-    """Convert millimetres to grid cells (1 cell = 25mm). Minimum 1."""
-    return max(1, round(mm / 25.0))
+    """Convert millimetres to grid cells (1 cell = 12.5mm). Minimum 1."""
+    return max(1, round(mm / 12.5))
 
 
 def parse_bounding_box(stl_path: str) -> Tuple[float, float, float]:
@@ -102,7 +102,7 @@ def load_stl_folder(folder_path: str) -> List[TileDefinition]:
 
             grid_w = mm_to_cells(dx)
             grid_h = mm_to_cells(dy)
-            grid_z = max(0.1, dz / 25.0)   # height in grid-cell units
+            grid_z = max(0.1, dz / 12.5)   # height in grid-cell units
             view_triangles = load_tile_mesh(
                 stl_path, min_x, min_y, min_z, dx / scale, dy / scale, dz / scale
             )

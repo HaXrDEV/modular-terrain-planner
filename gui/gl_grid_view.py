@@ -82,7 +82,7 @@ class GLGridView(QOpenGLWidget):
     # Camera defaults
     _DEFAULT_AZ   = 45.0
     _DEFAULT_EL   = 55.0
-    _DEFAULT_DIST = 28.0
+    _DEFAULT_DIST = 56.0
 
     def __init__(self, grid_model: GridModel, parent=None) -> None:
         super().__init__(parent)
@@ -241,7 +241,8 @@ class GLGridView(QOpenGLWidget):
         # --- Ghost preview ---
         gx, gy = self._hover_cell
         if self._pending_def is not None and gx >= 0:
-            ghost = PlacedTile(self._pending_def, gx, gy, self._pending_rot)
+            z_off = self._model.top_z_at(gx, gy)
+            ghost = PlacedTile(self._pending_def, gx, gy, self._pending_rot, z_offset=z_off)
             if self._model.can_place(ghost):
                 glEnable(GL_BLEND)
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -273,7 +274,7 @@ class GLGridView(QOpenGLWidget):
 
         # Model = translate to grid cell, scale to tile proportions, rotate in-place
         model = QMatrix4x4()
-        model.translate(float(pt.grid_x), float(pt.grid_y), 0.0)
+        model.translate(float(pt.grid_x), float(pt.grid_y), pt.z_offset)
         model.scale(ew, eh, gz)
         if pt.rotation != 0:
             model.translate(0.5, 0.5, 0.0)

@@ -4,9 +4,9 @@ from models.placed_tile import PlacedTile
 
 
 class GridModel:
-    CELL_SIZE_MM: float = 25.0
+    CELL_SIZE_MM: float = 12.5
 
-    def __init__(self, cols: int = 40, rows: int = 40) -> None:
+    def __init__(self, cols: int = 80, rows: int = 80) -> None:
         self.GRID_COLS = cols
         self.GRID_ROWS = rows
         self._placed: List[PlacedTile] = []
@@ -18,13 +18,13 @@ class GridModel:
         for (x, y) in cells:
             if x < 0 or y < 0 or x >= self.GRID_COLS or y >= self.GRID_ROWS:
                 return False
-        # Overlap check
+        # Overlap check — tiles at different z_offsets may share XY cells
         occupied = set()
         for pt in self._placed:
             for cell in pt.occupies():
-                occupied.add(cell)
+                occupied.add((cell[0], cell[1], pt.z_offset))
         for cell in cells:
-            if cell in occupied:
+            if (cell[0], cell[1], tile.z_offset) in occupied:
                 return False
         return True
 
@@ -35,13 +35,23 @@ class GridModel:
             return True
         return False
 
-    def remove_at(self, gx: int, gy: int) -> bool:
-        """Remove the first tile whose cells include (gx, gy). Returns True if removed."""
-        for i, pt in enumerate(self._placed):
+    def top_z_at(self, gx: int, gy: int) -> float:
+        """Return the highest z_offset + grid_z among tiles covering (gx, gy), or 0.0."""
+        best = 0.0
+        for pt in self._placed:
             if (gx, gy) in pt.occupies():
-                self._placed.pop(i)
-                return True
-        return False
+                best = max(best, pt.z_offset + pt.definition.grid_z)
+        return best
+
+    def remove_at(self, gx: int, gy: int) -> bool:
+        """Remove the topmost tile (highest z_offset) covering (gx, gy). Returns True if removed."""
+        candidates = [(i, pt) for i, pt in enumerate(self._placed)
+                      if (gx, gy) in pt.occupies()]
+        if not candidates:
+            return False
+        idx, _ = max(candidates, key=lambda t: t[1].z_offset)
+        self._placed.pop(idx)
+        return True
 
     def get_counts(self) -> Dict[str, int]:
         """Returns {tile_name: count} aggregated from all placed tiles."""

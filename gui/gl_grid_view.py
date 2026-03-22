@@ -100,6 +100,7 @@ class GLGridView(QOpenGLWidget):
         self._last_mouse: Optional[QPoint] = None
         self._drag_button: Optional[int]   = None
         self._hover_cell: Tuple[int, int]  = (-1, -1)
+        self._mouse_screen: Tuple[int, int] = (0, 0)
 
         # Pending placement
         self._pending_def: Optional[TileDefinition] = None
@@ -135,6 +136,9 @@ class GLGridView(QOpenGLWidget):
     def set_pending_tile(self, definition: Optional[TileDefinition], rotation: int) -> None:
         self._pending_def = definition
         self._pending_rot = rotation
+        # Recompute hover so the tile pivots around the current cursor position
+        mx, my = self._mouse_screen
+        self._hover_cell = self._compute_hover_cell(mx, my)
         self.update()
 
     def refresh(self) -> None:
@@ -377,12 +381,14 @@ class GLGridView(QOpenGLWidget):
     # Ray casting: screen → grid cell on Z=0 plane
     # ------------------------------------------------------------------
 
-    def _ray_to_grid(self, sx: int, sy: int) -> Tuple[int, int]:
+    def _ray_to_world(self, sx: int, sy: int, z_plane: float = 0.0) -> Optional[Tuple[float, float]]:
+        """Cast a ray from screen pixel (sx, sy) to world Z=z_plane.
+        Returns continuous (hx, hy) or None on miss."""
         w, h = max(self.width(), 1), max(self.height(), 1)
         proj, view = self._get_proj_view()
         inv_pv, ok = (proj * view).inverted()
         if not ok:
-            return -1, -1
+            return None
 
         ndx = (2.0 * sx / w) - 1.0
         ndy = 1.0 - (2.0 * sy / h)
@@ -395,14 +401,37 @@ class GLGridView(QOpenGLWidget):
 
         rd = far - near
         if abs(rd.z()) < 1e-6:
-            return -1, -1
-        t = -near.z() / rd.z()
+            return None
+        t = (z_plane - near.z()) / rd.z()
         if t < 0:
-            return -1, -1
+            return None
 
-        hx = near.x() + t * rd.x()
-        hy = near.y() + t * rd.y()
-        return int(math.floor(hx)), int(math.floor(hy))
+        return near.x() + t * rd.x(), near.y() + t * rd.y()
+
+    def _ray_to_grid(self, sx: int, sy: int) -> Tuple[int, int]:
+        world = self._ray_to_world(sx, sy, 0.0)
+        if world is None:
+            return -1, -1
+        return int(math.floor(world[0])), int(math.floor(world[1]))
+
+    def _compute_hover_cell(self, mx: int, my: int) -> Tuple[int, int]:
+        """Return the grid origin for the pending tile centered on the cursor.
+        Falls back to raw floor position when no tile is pending."""
+        world = self._ray_to_world(mx, my, 0.0)
+        if world is None:
+            return -1, -1
+        hx, hy = world
+        if self._pending_def is None:
+            return int(math.floor(hx)), int(math.floor(hy))
+        if self._pending_rot in (90, 270):
+            ew = float(self._pending_def.grid_h)
+            eh = float(self._pending_def.grid_w)
+        else:
+            ew = float(self._pending_def.grid_w)
+            eh = float(self._pending_def.grid_h)
+        gx = int(round(hx - ew / 2.0))
+        gy = int(round(hy - eh / 2.0))
+        return gx, gy
 
     # ------------------------------------------------------------------
     # Mouse / keyboard events
@@ -413,7 +442,7 @@ class GLGridView(QOpenGLWidget):
         self._drag_button = event.button()
 
         if event.button() == Qt.LeftButton:
-            gx, gy = self._ray_to_grid(event.x(), event.y())
+            gx, gy = self._hover_cell
             if gx >= 0:
                 self.tile_place_requested.emit(gx, gy)
         elif event.button() == Qt.RightButton:
@@ -449,7 +478,8 @@ class GLGridView(QOpenGLWidget):
             self.update()
         else:
             # Update hover ghost
-            gx, gy = self._ray_to_grid(event.x(), event.y())
+            self._mouse_screen = (event.x(), event.y())
+            gx, gy = self._compute_hover_cell(event.x(), event.y())
             if (gx, gy) != self._hover_cell:
                 self._hover_cell = (gx, gy)
                 self.hover_cell_changed.emit(gx, gy)

@@ -33,10 +33,13 @@ layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNorm;
 uniform mat4 uMVP;
 uniform vec3 uNormScale;
+uniform float uRotZ;
 out vec3 vNorm;
 void main() {
     gl_Position = uMVP * vec4(aPos, 1.0);
-    vNorm = normalize(aNorm * uNormScale);
+    vec3 ns = aNorm * uNormScale;
+    float c = cos(uRotZ), s = sin(uRotZ);
+    vNorm = normalize(vec3(c*ns.x - s*ns.y, s*ns.x + c*ns.y, ns.z));
 }
 """
 
@@ -60,27 +63,15 @@ void main() {
 # CPU-side geometry helpers
 # ---------------------------------------------------------------------------
 
-def build_vdata(triangles: np.ndarray, rotation: int = 0) -> np.ndarray:
+def build_vdata(triangles: np.ndarray) -> np.ndarray:
     """
     Build interleaved (pos xyz, norm xyz) float32 VBO data from a (N, 3, 3) array.
 
-    Applies Z-axis rotation around (0.5, 0.5) in XY, computes flat per-face
-    normals via cross product, and returns a flat (N*3*6,) float32 array.
+    Computes flat per-face normals via cross product and returns a flat
+    (N*3*6,) float32 array. Rotation is handled at draw time via the model
+    matrix and the uRotZ shader uniform.
     """
-    tris = triangles.copy()  # (N, 3, 3)
-
-    if rotation != 0:
-        cx = tris[:, :, 0] - 0.5
-        cy = tris[:, :, 1] - 0.5
-        if rotation == 90:
-            tris[:, :, 0] = 0.5 - cy
-            tris[:, :, 1] = 0.5 + cx
-        elif rotation == 180:
-            tris[:, :, 0] = 1.0 - tris[:, :, 0]
-            tris[:, :, 1] = 1.0 - tris[:, :, 1]
-        else:  # 270
-            tris[:, :, 0] = 0.5 + cy
-            tris[:, :, 1] = 0.5 - cx
+    tris = triangles  # (N, 3, 3) — no copy needed, read-only
 
     v0, v1, v2 = tris[:, 0], tris[:, 1], tris[:, 2]
     norms = np.cross(v1 - v0, v2 - v0)

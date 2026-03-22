@@ -72,7 +72,7 @@ class TilePreviewWidget(QOpenGLWidget):
         self._defn     = defn
         self._rotation = rotation
         if defn is not None:
-            self._auto_fit_camera(defn)
+            self._auto_fit_camera(defn, rotation)
         if self._ready:
             self._rebuild_geometry()
         else:
@@ -93,6 +93,7 @@ class TilePreviewWidget(QOpenGLWidget):
             self._u_ns    = glGetUniformLocation(p, b"uNormScale")
             self._u_col   = glGetUniformLocation(p, b"uColor")
             self._u_alpha = glGetUniformLocation(p, b"uAlpha")
+            self._u_rotz  = glGetUniformLocation(p, b"uRotZ")
 
             glEnable(GL_DEPTH_TEST)
             glClearColor(0.13, 0.13, 0.15, 1.0)
@@ -119,19 +120,28 @@ class TilePreviewWidget(QOpenGLWidget):
 
         proj, view = self._get_proj_view()
 
-        # Scale mesh from [0,1]³ to actual grid-cell proportions
-        gw = float(self._defn.grid_w)
-        gh = float(self._defn.grid_h)
-        gz = float(self._defn.grid_z)
+        # Scale to tile proportions, accounting for rotation swapping w/h
+        defn = self._defn
+        if self._rotation in (90, 270):
+            ew, eh = float(defn.grid_h), float(defn.grid_w)
+        else:
+            ew, eh = float(defn.grid_w), float(defn.grid_h)
+        gz = float(defn.grid_z)
+
         model = QMatrix4x4()
-        model.scale(gw, gh, gz)
+        model.scale(ew, eh, gz)
+        if self._rotation != 0:
+            model.translate(0.5, 0.5, 0.0)
+            model.rotate(float(self._rotation), 0.0, 0.0, 1.0)
+            model.translate(-0.5, -0.5, 0.0)
 
         mvp = proj * view * model
         mvp_arr = np.array(mvp.data(), dtype=np.float32)
 
         glUseProgram(self._mesh_prog)
         glUniformMatrix4fv(self._u_mvp, 1, GL_FALSE, mvp_arr)
-        glUniform3f(self._u_ns, 1.0 / gw, 1.0 / gh, 1.0 / max(gz, 0.001))
+        glUniform1f(self._u_rotz, math.radians(self._rotation))
+        glUniform3f(self._u_ns, 1.0 / ew, 1.0 / eh, 1.0 / max(gz, 0.001))
         glUniform3f(self._u_col,
                     self._defn.color.redF(),
                     self._defn.color.greenF(),
@@ -161,7 +171,7 @@ class TilePreviewWidget(QOpenGLWidget):
             self.doneCurrent()
             return
 
-        vdata = build_vdata(self._defn.view_triangles, self._rotation)
+        vdata = build_vdata(self._defn.view_triangles)
         if len(vdata) > 0:
             self._vao, self._vbo, self._n_verts = upload_geometry(vdata, 6)
 
@@ -171,9 +181,13 @@ class TilePreviewWidget(QOpenGLWidget):
     # Camera
     # ------------------------------------------------------------------
 
-    def _auto_fit_camera(self, defn: TileDefinition) -> None:
+    def _auto_fit_camera(self, defn: TileDefinition, rotation: int = 0) -> None:
         """Set camera target and distance to frame the tile's actual proportions."""
-        gw, gh, gz = float(defn.grid_w), float(defn.grid_h), float(defn.grid_z)
+        if rotation in (90, 270):
+            gw, gh = float(defn.grid_h), float(defn.grid_w)
+        else:
+            gw, gh = float(defn.grid_w), float(defn.grid_h)
+        gz = float(defn.grid_z)
         self._target = [gw / 2.0, gh / 2.0, gz / 2.0]
         half_diag = math.sqrt(gw ** 2 + gh ** 2 + gz ** 2) / 2.0
         fov_half = math.radians(22.5)   # half of 45° FOV

@@ -121,16 +121,14 @@ class GLGridView(QOpenGLWidget):
     # ------------------------------------------------------------------
 
     def load_definitions(self, definitions: List[TileDefinition]) -> None:
-        """Upload VBOs for every tile + rotation combination."""
+        """Upload a VBO for each tile (single canonical orientation)."""
         if not self._ready:
-            # Store for later — initializeGL will call this
             self._pending_definitions = definitions
             return
         self.makeCurrent()
         self._mesh_cache.clear()
         for defn in definitions:
-            for rot in (0, 90, 180, 270):
-                self._upload_tile(defn, rot)
+            self._upload_tile(defn)
         self.doneCurrent()
         self.update()
 
@@ -166,9 +164,8 @@ class GLGridView(QOpenGLWidget):
             return
         self.makeCurrent()
         for defn in definitions:
-            for rot in (0, 90, 180, 270):
-                if (defn.stl_path, rot) not in self._mesh_cache:
-                    self._upload_tile(defn, rot)
+            if defn.stl_path not in self._mesh_cache:
+                self._upload_tile(defn)
         self.doneCurrent()
         self.update()
 
@@ -190,6 +187,7 @@ class GLGridView(QOpenGLWidget):
             self._u_ns    = glGetUniformLocation(p, b"uNormScale")
             self._u_col   = glGetUniformLocation(p, b"uColor")
             self._u_alpha = glGetUniformLocation(p, b"uAlpha")
+            self._u_rotz  = glGetUniformLocation(p, b"uRotZ")
 
             # Uniform locations — flat
             p = self._flat_prog
@@ -256,12 +254,12 @@ class GLGridView(QOpenGLWidget):
 
     def _draw_tile(self, pt: PlacedTile, proj: QMatrix4x4, view: QMatrix4x4, alpha: float) -> None:
         defn = pt.definition
-        key  = (defn.stl_path, pt.rotation)
+        key  = defn.stl_path
 
         # Lazily build VBO if missing
         if key not in self._mesh_cache:
             if defn.view_triangles is not None and len(defn.view_triangles) > 0:
-                self._upload_tile(defn, pt.rotation)
+                self._upload_tile(defn)
             else:
                 return
         if key not in self._mesh_cache:
@@ -269,18 +267,26 @@ class GLGridView(QOpenGLWidget):
 
         vao, _vbo, n_verts = self._mesh_cache[key]
 
-        # Model = translate to grid cell + scale by real-world proportions
+        ew = float(pt.effective_w)
+        eh = float(pt.effective_h)
+        gz = float(defn.grid_z)
+
+        # Model = translate to grid cell, scale to tile proportions, rotate in-place
         model = QMatrix4x4()
         model.translate(float(pt.grid_x), float(pt.grid_y), 0.0)
-        model.scale(float(pt.effective_w), float(pt.effective_h), float(defn.grid_z))
+        model.scale(ew, eh, gz)
+        if pt.rotation != 0:
+            model.translate(0.5, 0.5, 0.0)
+            model.rotate(float(pt.rotation), 0.0, 0.0, 1.0)
+            model.translate(-0.5, -0.5, 0.0)
 
         mvp = proj * view * model
         mvp_arr = np.array(mvp.data(), dtype=np.float32)
 
-        # Normal scale = inverse of scale factors (no rotation in model)
-        ns = (1.0 / pt.effective_w, 1.0 / pt.effective_h, 1.0 / max(defn.grid_z, 0.001))
+        ns = (1.0 / ew, 1.0 / eh, 1.0 / max(gz, 0.001))
 
         glUniformMatrix4fv(self._u_mvp,   1, GL_FALSE, mvp_arr)
+        glUniform1f(self._u_rotz, math.radians(pt.rotation))
         glUniform3f(self._u_ns,   *ns)
         glUniform3f(self._u_col,  defn.color.redF(), defn.color.greenF(), defn.color.blueF())
         glUniform1f(self._u_alpha, alpha)
@@ -293,14 +299,14 @@ class GLGridView(QOpenGLWidget):
     # GPU resource management
     # ------------------------------------------------------------------
 
-    def _upload_tile(self, defn: TileDefinition, rotation: int) -> None:
-        """Build and cache a VAO for (defn, rotation)."""
+    def _upload_tile(self, defn: TileDefinition) -> None:
+        """Build and cache a VAO for defn (canonical orientation; rotation is matrix-driven)."""
         if defn.view_triangles is None or len(defn.view_triangles) == 0:
             return
-        vdata = _build_vdata(defn.view_triangles, rotation)
+        vdata = _build_vdata(defn.view_triangles)
         if len(vdata) == 0:
             return
-        self._mesh_cache[(defn.stl_path, rotation)] = _upload_geometry(vdata, 6)
+        self._mesh_cache[defn.stl_path] = _upload_geometry(vdata, 6)
 
     def _build_static_geometry(self) -> None:
         """Build ground plane and grid line geometry."""

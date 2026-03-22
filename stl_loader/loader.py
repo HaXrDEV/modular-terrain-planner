@@ -36,38 +36,6 @@ def parse_bounding_box(stl_path: str) -> Tuple[float, float, float]:
     return dx, dy, dz
 
 
-def _decimate_voxel(verts: np.ndarray) -> np.ndarray:
-    """
-    Reduce triangle count by keeping one triangle per spatial voxel cell.
-
-    Uses centroid-based voxel clustering: each triangle is mapped to a cell
-    by its centroid, and one representative triangle per cell is kept.
-    This preserves mesh connectivity far better than uniform index subsampling.
-
-    verts: (N, 3, 3) float array of triangle vertices
-    Returns: (M, 3, 3) float array, M ≤ 30 000–65 000 for typical terrain meshes
-    """
-
-    all_pts = verts.reshape(-1, 3)
-    lo = all_pts.min(axis=0)
-    hi = all_pts.max(axis=0)
-    span = hi - lo
-    span[span < 1e-10] = 1.0
-
-    # Resolution 100 empirically gives 30 000–65 000 output triangles for
-    # typical D&D terrain STL files (tested on 120k–430k-triangle meshes).
-    res = 100
-
-    centroids = verts.mean(axis=1)              # (N, 3)
-    norm = (centroids - lo) / span              # [0, 1]
-    cell = np.floor(norm * res).astype(np.int64).clip(0, res - 1)
-    cell_ids = cell[:, 0] + cell[:, 1] * res + cell[:, 2] * (res * res)
-
-    # np.unique returns the first occurrence of each unique cell_id
-    _, first = np.unique(cell_ids, return_index=True)
-    return verts[first]
-
-
 def load_tile_mesh(
     stl_path: str,
     min_x: float,
@@ -78,15 +46,11 @@ def load_tile_mesh(
     dz: float,
 ) -> np.ndarray:
     """
-    Load an STL file and return a decimated, normalised (N, 3, 3) float32 array.
+    Load an STL file and return the full normalised (N, 3, 3) float32 array.
 
     Each vertex is normalised to [0, 1] in XYZ relative to the bounding box:
       nx = (x - min_x) / dx,  ny = (y - min_y) / dy,  nz = (z - min_z) / dz
     nz = 0 is the floor; nz = 1 is the tallest point.
-
-    The full mesh is loaded (no index subsampling), then reduced to ≤ 60 000
-    triangles via voxel-clustering decimation so the mesh remains spatially
-    complete rather than sparse.
     """
     from stl import mesh as stl_mesh
 
@@ -101,8 +65,6 @@ def load_tile_mesh(
     verts[:, :, 0] = (verts[:, :, 0] - min_x) / sx
     verts[:, :, 1] = (verts[:, :, 1] - min_y) / sy
     verts[:, :, 2] = (verts[:, :, 2] - min_z) / sz
-
-    verts = _decimate_voxel(verts)
 
     return verts.astype(np.float32)
 

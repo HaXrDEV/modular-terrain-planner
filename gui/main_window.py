@@ -330,6 +330,7 @@ class MainWindow(QMainWindow):
 
     def _on_tab_closed(self, folder_path: str) -> None:
         self._loaded_folders.pop(folder_path, None)
+        self._settings.remove_folder(folder_path)
         self._update_status()
 
     # ------------------------------------------------------------------

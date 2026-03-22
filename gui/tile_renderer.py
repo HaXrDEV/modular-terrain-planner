@@ -207,7 +207,7 @@ class TileRenderer:
     # ------------------------------------------------------------------
 
     def _render(self, defn: TileDefinition, rotation: int) -> Optional[QPixmap]:
-        if not defn.view_triangles:
+        if defn.view_triangles is None or len(defn.view_triangles) == 0:
             return None
 
         rotated = [

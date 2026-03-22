@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
-from typing import List, Tuple
 from PyQt5.QtGui import QColor
+
+import numpy as np
 
 
 @dataclass
@@ -11,10 +12,14 @@ class TileDefinition:
     grid_h: int      # Height in grid cells (derived from bounding box Y / 25mm)
     grid_z: float    # Height in grid cell units (dz_mm / 25); minimum 0.1
     color: QColor    # Assigned deterministically from name hash
-    # Normalized [0,1] XYZ triangles for 3D rendering.
-    # Each entry is [(x0,y0,z0), (x1,y1,z1), (x2,y2,z2)] with coords in [0,1].
+    # Normalised [0,1] XYZ triangle vertices for 3D rendering.
+    # Shape: (N, 3, 3) — N triangles × 3 vertices × (x, y, z).
     # nz=0 is tile floor level; nz=1 is the tallest point in the mesh.
-    view_triangles: List[List[Tuple[float, float, float]]] = field(default_factory=list)
+    # compare=False: numpy arrays can't be used in __eq__ comparisons.
+    view_triangles: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 3, 3), dtype=np.float32),
+        compare=False,
+    )
 
     @staticmethod
     def color_for_name(name: str) -> QColor:

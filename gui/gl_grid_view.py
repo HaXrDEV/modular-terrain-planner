@@ -96,33 +96,40 @@ void main() { FragColor = uColor; }
 # CPU-side geometry helpers
 # ---------------------------------------------------------------------------
 
-def _rotate_norm_3d(nx: float, ny: float, nz: float, rotation: int):
-    cx, cy = nx - 0.5, ny - 0.5
-    if rotation == 0:   return nx, ny, nz
-    if rotation == 90:  return 0.5 - cy, 0.5 + cx, nz
-    if rotation == 180: return 1.0 - nx, 1.0 - ny, nz
-    if rotation == 270: return 0.5 + cy, 0.5 - cx, nz
-    return nx, ny, nz
+def _build_vdata(triangles: np.ndarray, rotation: int = 0) -> np.ndarray:
+    """
+    Build interleaved (pos xyz, norm xyz) float32 VBO data from a (N, 3, 3) array.
 
+    Applies Z-axis rotation around (0.5, 0.5) in XY, computes flat per-face
+    normals via cross product, and returns a flat (N*3*6,) float32 array.
+    """
+    tris = triangles.copy()  # (N, 3, 3)
 
-def _build_vdata(triangles) -> np.ndarray:
-    """Build interleaved (pos xyz, norm xyz) float32 array with flat per-face normals."""
-    rows: list = []
-    for tri in triangles:
-        p0, p1, p2 = tri
-        ax = p1[0]-p0[0]; ay = p1[1]-p0[1]; az = p1[2]-p0[2]
-        bx = p2[0]-p0[0]; by = p2[1]-p0[1]; bz = p2[2]-p0[2]
-        nx = ay*bz - az*by
-        ny = az*bx - ax*bz
-        nz = ax*by - ay*bx
-        m = math.sqrt(nx*nx + ny*ny + nz*nz)
-        if m < 1e-12:
-            nx = ny = 0.0; nz = 1.0
-        else:
-            nx /= m; ny /= m; nz /= m
-        for v in (p0, p1, p2):
-            rows += [float(v[0]), float(v[1]), float(v[2]), nx, ny, nz]
-    return np.array(rows, dtype=np.float32)
+    if rotation != 0:
+        cx = tris[:, :, 0] - 0.5
+        cy = tris[:, :, 1] - 0.5
+        if rotation == 90:
+            tris[:, :, 0] = 0.5 - cy
+            tris[:, :, 1] = 0.5 + cx
+        elif rotation == 180:
+            tris[:, :, 0] = 1.0 - tris[:, :, 0]
+            tris[:, :, 1] = 1.0 - tris[:, :, 1]
+        else:  # 270
+            tris[:, :, 0] = 0.5 + cy
+            tris[:, :, 1] = 0.5 - cx
+
+    v0, v1, v2 = tris[:, 0], tris[:, 1], tris[:, 2]
+    norms = np.cross(v1 - v0, v2 - v0)          # (N, 3) flat normals
+    lengths = np.linalg.norm(norms, axis=1, keepdims=True)
+    degen = (lengths < 1e-12).squeeze(axis=1)
+    lengths = np.where(lengths < 1e-12, 1.0, lengths)
+    norms /= lengths
+    norms[degen] = [0.0, 0.0, 1.0]
+
+    # Expand normals to per-vertex and interleave with positions: (N, 3, 6)
+    norms_exp = np.repeat(norms[:, np.newaxis, :], 3, axis=1)
+    combined = np.concatenate([tris, norms_exp], axis=2)  # (N, 3, 6)
+    return combined.reshape(-1).astype(np.float32)
 
 
 def _upload_geometry(vdata: np.ndarray, n_attribs: int = 6) -> Tuple[int, int, int]:
@@ -303,7 +310,7 @@ class GLGridView(QOpenGLWidget):
 
         # Lazily build VBO if missing
         if key not in self._mesh_cache:
-            if defn.view_triangles:
+            if defn.view_triangles is not None and len(defn.view_triangles) > 0:
                 self._upload_tile(defn, pt.rotation)
             else:
                 return
@@ -338,13 +345,9 @@ class GLGridView(QOpenGLWidget):
 
     def _upload_tile(self, defn: TileDefinition, rotation: int) -> None:
         """Build and cache a VAO for (defn, rotation)."""
-        if not defn.view_triangles:
+        if defn.view_triangles is None or len(defn.view_triangles) == 0:
             return
-        rotated = [
-            [_rotate_norm_3d(v[0], v[1], v[2], rotation) for v in tri]
-            for tri in defn.view_triangles
-        ]
-        vdata = _build_vdata(rotated)
+        vdata = _build_vdata(defn.view_triangles, rotation)
         if len(vdata) == 0:
             return
         self._mesh_cache[(defn.stl_path, rotation)] = _upload_geometry(vdata, 6)

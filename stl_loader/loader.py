@@ -38,20 +38,23 @@ def extract_top_view_triangles(
     stl_path: str,
     min_x: float,
     min_y: float,
+    min_z: float,
     dx: float,
     dy: float,
-) -> List[List[Tuple[float, float]]]:
+    dz: float,
+) -> List[List[Tuple[float, float, float]]]:
     """
-    Return all triangles of the mesh projected onto the XY plane, with each
-    vertex normalised to [0, 1] relative to the bounding box.
+    Return all triangles of the mesh with each vertex normalised to [0, 1]
+    in XYZ space relative to the bounding box.
 
+    nz=0 is the floor of the tile; nz=1 is the tallest point.
     Large meshes are sub-sampled to at most MAX_TRIS triangles so rendering
     stays fast at any zoom level.
     """
     from stl import mesh as stl_mesh
     import numpy as np
 
-    MAX_TRIS = 4000
+    MAX_TRIS = 10000
 
     m = stl_mesh.Mesh.from_file(stl_path)
     # m.vectors shape: (n_triangles, 3, 3) — axis 2 is (x, y, z)
@@ -66,11 +69,16 @@ def extract_top_view_triangles(
     # Avoid division by zero for degenerate meshes
     sx = dx if dx > 0 else 1.0
     sy = dy if dy > 0 else 1.0
+    sz = dz if dz > 0 else 1.0  # flat tiles get nz=0 for all verts
 
     triangles = []
     for tri in verts:
         pts = [
-            (float((tri[i][0] - min_x) / sx), float((tri[i][1] - min_y) / sy))
+            (
+                float((tri[i][0] - min_x) / sx),
+                float((tri[i][1] - min_y) / sy),
+                float((tri[i][2] - min_z) / sz),
+            )
             for i in range(3)
         ]
         triangles.append(pts)
@@ -96,7 +104,7 @@ def load_stl_folder(folder_path: str) -> List[TileDefinition]:
         name = os.path.splitext(os.path.basename(stl_path))[0]
         try:
             m = stl_mesh.Mesh.from_file(stl_path)
-            min_x, min_y = float(m.min_[0]), float(m.min_[1])
+            min_x, min_y, min_z = float(m.min_[0]), float(m.min_[1]), float(m.min_[2])
             dx = float(m.max_[0] - m.min_[0])
             dy = float(m.max_[1] - m.min_[1])
             dz = float(m.max_[2] - m.min_[2])
@@ -111,8 +119,9 @@ def load_stl_folder(folder_path: str) -> List[TileDefinition]:
 
             grid_w = mm_to_cells(dx)
             grid_h = mm_to_cells(dy)
+            grid_z = max(0.1, dz / 25.0)   # height in grid-cell units
             view_triangles = extract_top_view_triangles(
-                stl_path, min_x, min_y, dx / scale, dy / scale
+                stl_path, min_x, min_y, min_z, dx / scale, dy / scale, dz / scale
             )
         except Exception as exc:
             print(f"[STL loader] Skipping '{name}': {exc}")
@@ -124,6 +133,7 @@ def load_stl_folder(folder_path: str) -> List[TileDefinition]:
             stl_path=stl_path,
             grid_w=grid_w,
             grid_h=grid_h,
+            grid_z=grid_z,
             color=color,
             view_triangles=view_triangles,
         ))

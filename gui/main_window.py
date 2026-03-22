@@ -10,8 +10,7 @@ from models.placed_tile import PlacedTile
 from models.tile_definition import TileDefinition
 from stl_loader.loader import load_stl_folder
 from export.csv_exporter import export_to_csv
-from gui.grid_scene import GridScene
-from gui.grid_view import GridView
+from gui.gl_grid_view import GLGridView
 from gui.palette_panel import PalettePanel
 
 
@@ -27,8 +26,7 @@ class MainWindow(QMainWindow):
         self._pending_rotation: int = 0
 
         # Widgets
-        self._scene = GridScene(self._model)
-        self._view = GridView(self._scene)
+        self._view = GLGridView(self._model)
         self._palette = PalettePanel()
 
         # Layout
@@ -49,7 +47,6 @@ class MainWindow(QMainWindow):
         self._view.tile_place_requested.connect(self._on_tile_placed)
         self._view.tile_remove_requested.connect(self._on_tile_removed)
         self._view.rotate_requested.connect(self._on_rotate)
-        self._view.hover_cell_changed.connect(self._on_hover)
 
         self._update_status()
 
@@ -65,12 +62,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No STL files", f"No .stl files found in:\n{folder}")
             return
         self._palette.populate(definitions)
+        self._view.load_definitions(definitions)
         self._update_status()
 
     def _on_tile_selected(self, defn: Optional[TileDefinition]) -> None:
         self._selected_definition = defn
         self._pending_rotation = 0
-        self._scene.hide_ghost()
+        self._view.set_pending_tile(defn, 0)
         self._update_status()
 
     def _on_tile_placed(self, gx: int, gy: int) -> None:
@@ -83,23 +81,18 @@ class MainWindow(QMainWindow):
             rotation=self._pending_rotation,
         )
         self._model.place(pt)
-        self._scene.refresh()
-        self._scene.hide_ghost()
-        # Re-show ghost at same position
-        self._show_ghost_at(gx, gy)
+        self._view.refresh()
         self._update_status()
 
     def _on_tile_removed(self, gx: int, gy: int) -> None:
         self._model.remove_at(gx, gy)
-        self._scene.refresh()
+        self._view.refresh()
         self._update_status()
 
     def _on_rotate(self) -> None:
         self._pending_rotation = (self._pending_rotation + 90) % 360
+        self._view.set_pending_tile(self._selected_definition, self._pending_rotation)
         self._update_status()
-
-    def _on_hover(self, gx: int, gy: int) -> None:
-        self._show_ghost_at(gx, gy)
 
     def _on_export(self) -> None:
         counts = self._model.get_counts()
@@ -120,19 +113,6 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _show_ghost_at(self, gx: int, gy: int) -> None:
-        if self._selected_definition is None:
-            self._scene.hide_ghost()
-            return
-        ghost = PlacedTile(
-            definition=self._selected_definition,
-            grid_x=gx,
-            grid_y=gy,
-            rotation=self._pending_rotation,
-        )
-        valid = self._model.can_place(ghost)
-        self._scene.show_ghost(ghost, valid)
-
     def _update_status(self) -> None:
         name = self._selected_definition.name if self._selected_definition else "None"
         counts = self._model.get_counts()

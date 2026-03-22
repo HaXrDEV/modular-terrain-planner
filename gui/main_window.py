@@ -1,0 +1,150 @@
+from typing import Optional
+
+from PyQt5.QtWidgets import (
+    QMainWindow, QSplitter, QFileDialog, QMessageBox, QStatusBar,
+)
+from PyQt5.QtCore import Qt
+
+from models.grid_model import GridModel
+from models.placed_tile import PlacedTile
+from models.tile_definition import TileDefinition
+from stl_loader.loader import load_stl_folder
+from export.csv_exporter import export_to_csv
+from gui.grid_scene import GridScene
+from gui.grid_view import GridView
+from gui.palette_panel import PalettePanel
+
+
+class MainWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("D&D STL Dungeon Designer")
+        self.resize(1200, 800)
+
+        # State
+        self._model = GridModel()
+        self._selected_definition: Optional[TileDefinition] = None
+        self._pending_rotation: int = 0
+
+        # Widgets
+        self._scene = GridScene(self._model)
+        self._view = GridView(self._scene)
+        self._palette = PalettePanel()
+
+        # Layout
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self._palette)
+        splitter.addWidget(self._view)
+        splitter.setStretchFactor(1, 1)
+        self.setCentralWidget(splitter)
+
+        self._status = QStatusBar()
+        self.setStatusBar(self._status)
+
+        # Connections
+        self._palette.tile_selected.connect(self._on_tile_selected)
+        self._palette.load_folder_clicked.connect(self._on_load_folder)
+        self._palette.export_clicked.connect(self._on_export)
+
+        self._view.tile_place_requested.connect(self._on_tile_placed)
+        self._view.tile_remove_requested.connect(self._on_tile_removed)
+        self._view.rotate_requested.connect(self._on_rotate)
+        self._view.hover_cell_changed.connect(self._on_hover)
+
+        self._update_status()
+
+    # ------------------------------------------------------------------
+    # Slots
+    # ------------------------------------------------------------------
+    def _on_load_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Select STL folder")
+        if not folder:
+            return
+        definitions = load_stl_folder(folder)
+        if not definitions:
+            QMessageBox.warning(self, "No STL files", f"No .stl files found in:\n{folder}")
+            return
+        self._palette.populate(definitions)
+        self._update_status()
+
+    def _on_tile_selected(self, defn: Optional[TileDefinition]) -> None:
+        self._selected_definition = defn
+        self._pending_rotation = 0
+        self._scene.hide_ghost()
+        self._update_status()
+
+    def _on_tile_placed(self, gx: int, gy: int) -> None:
+        if self._selected_definition is None:
+            return
+        pt = PlacedTile(
+            definition=self._selected_definition,
+            grid_x=gx,
+            grid_y=gy,
+            rotation=self._pending_rotation,
+        )
+        self._model.place(pt)
+        self._scene.refresh()
+        self._scene.hide_ghost()
+        # Re-show ghost at same position
+        self._show_ghost_at(gx, gy)
+        self._update_status()
+
+    def _on_tile_removed(self, gx: int, gy: int) -> None:
+        self._model.remove_at(gx, gy)
+        self._scene.refresh()
+        self._update_status()
+
+    def _on_rotate(self) -> None:
+        self._pending_rotation = (self._pending_rotation + 90) % 360
+        self._update_status()
+
+    def _on_hover(self, gx: int, gy: int) -> None:
+        self._show_ghost_at(gx, gy)
+
+    def _on_export(self) -> None:
+        counts = self._model.get_counts()
+        if not counts:
+            QMessageBox.information(self, "Nothing to export", "Place some tiles first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export CSV", "print_list.csv", "CSV files (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            export_to_csv(self._model, path)
+            QMessageBox.information(self, "Exported", f"Saved to:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _show_ghost_at(self, gx: int, gy: int) -> None:
+        if self._selected_definition is None:
+            self._scene.hide_ghost()
+            return
+        ghost = PlacedTile(
+            definition=self._selected_definition,
+            grid_x=gx,
+            grid_y=gy,
+            rotation=self._pending_rotation,
+        )
+        valid = self._model.can_place(ghost)
+        self._scene.show_ghost(ghost, valid)
+
+    def _update_status(self) -> None:
+        name = self._selected_definition.name if self._selected_definition else "None"
+        counts = self._model.get_counts()
+        total = sum(counts.values())
+        counts_str = ", ".join(
+            f"{k}: {v}" for k, v in sorted(counts.items())
+        ) or "—"
+        self._status.showMessage(
+            f"Selected: {name}  |  Rotation: {self._pending_rotation}°  |  "
+            f"Total placed: {total}  |  {counts_str}"
+        )
+        self._palette.update_info(
+            self._pending_rotation,
+            counts.get(name, 0) if self._selected_definition else 0,
+        )

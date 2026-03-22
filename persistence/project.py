@@ -11,25 +11,31 @@ looking up each stl_path in the rebuilt definition map.
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-PROJECT_VERSION = 1
+PROJECT_VERSION = 2
 
 
 def save_project(
     path: str,
     folders: List[str],
     placed_tiles,
+    grid_cols: int = 40,
+    grid_rows: int = 40,
 ) -> None:
     """
     Write the current session to *path* (.mtp / JSON).
 
     Parameters
     ----------
-    path       : destination file path
-    folders    : ordered list of loaded folder paths (tab order)
+    path         : destination file path
+    folders      : ordered list of loaded folder paths (tab order)
     placed_tiles : iterable of PlacedTile objects
+    grid_cols    : number of grid columns
+    grid_rows    : number of grid rows
     """
     data: Dict[str, Any] = {
         "version": PROJECT_VERSION,
+        "grid_cols": grid_cols,
+        "grid_rows": grid_rows,
         "folders": list(folders),
         "tiles": [
             {
@@ -45,9 +51,9 @@ def save_project(
         json.dump(data, fh, indent=2)
 
 
-def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
+def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]], int, int]:
     """
-    Read a project file and return ``(folders, tile_records)``.
+    Read a project file and return ``(folders, tile_records, grid_cols, grid_rows)``.
 
     ``folders`` is the ordered list of STL folder paths.
     ``tile_records`` is a list of dicts with keys:
@@ -60,6 +66,8 @@ def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
     if not isinstance(data, dict):
         raise ValueError("Invalid project file format.")
 
+    grid_cols = int(data.get("grid_cols", 40))
+    grid_rows = int(data.get("grid_rows", 40))
     folders = [str(f) for f in data.get("folders", [])]
     tiles   = [
         {
@@ -70,4 +78,4 @@ def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
         }
         for t in data.get("tiles", [])
     ]
-    return folders, tiles
+    return folders, tiles, grid_cols, grid_rows

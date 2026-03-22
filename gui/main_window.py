@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QMainWindow, QSplitter, QFileDialog, QMessageBox, QStatusBar,
-    QAction, QMenuBar,
+    QAction, QMenuBar, QDialog, QDialogButtonBox, QFormLayout, QSpinBox,
 )
 
 from models.grid_model import GridModel
@@ -128,6 +128,13 @@ class MainWindow(QMainWindow):
         act_quit.triggered.connect(self.close)
         file_menu.addAction(act_quit)
 
+        # Edit menu
+        edit_menu = mb.addMenu("&Edit")
+
+        act_grid_size = QAction("&Grid Size…", self)
+        act_grid_size.triggered.connect(self._on_grid_size)
+        edit_menu.addAction(act_grid_size)
+
     # ------------------------------------------------------------------
     # Session restore
     # ------------------------------------------------------------------
@@ -165,12 +172,16 @@ class MainWindow(QMainWindow):
             self._view.add_definitions(new_defs)
         self._palette.add_folder_tab(folder, definitions)
 
-    def _apply_project(self, folders: list, tile_records: list) -> None:
+    def _apply_project(self, folders: list, tile_records: list,
+                       grid_cols: int = 40, grid_rows: int = 40) -> None:
         """
         Clear the current session and apply a loaded project.
         Missing folders or unresolvable stl_paths are skipped with a warning.
         """
         self._on_new(confirm=False)
+        self._model.GRID_COLS = grid_cols
+        self._model.GRID_ROWS = grid_rows
+        self._view.rebuild_grid_geometry()
 
         missing_folders = []
         for folder in folders:
@@ -255,11 +266,11 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            folders, tile_records = load_project(path)
+            folders, tile_records, grid_cols, grid_rows = load_project(path)
         except Exception as exc:
             QMessageBox.critical(self, "Open failed", str(exc))
             return
-        self._apply_project(folders, tile_records)
+        self._apply_project(folders, tile_records, grid_cols, grid_rows)
         self._project_path = path
         self._is_dirty = False
         self._update_title()
@@ -283,7 +294,8 @@ class MainWindow(QMainWindow):
             folders = [self._palette.folder_for_tab(i)
                        for i in range(self._palette.tab_count())
                        if self._palette.folder_for_tab(i)]
-            save_project(path, folders, self._model.all_placed())
+            save_project(path, folders, self._model.all_placed(),
+                         self._model.GRID_COLS, self._model.GRID_ROWS)
         except Exception as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
             return
@@ -396,6 +408,44 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _on_grid_size(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Grid Size")
+        layout = QFormLayout(dlg)
+
+        cols_spin = QSpinBox()
+        cols_spin.setRange(1, 200)
+        cols_spin.setValue(self._model.GRID_COLS)
+        layout.addRow("Columns:", cols_spin)
+
+        rows_spin = QSpinBox()
+        rows_spin.setRange(1, 200)
+        rows_spin.setValue(self._model.GRID_ROWS)
+        layout.addRow("Rows:", rows_spin)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addRow(buttons)
+
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        cols, rows = cols_spin.value(), rows_spin.value()
+        if cols == self._model.GRID_COLS and rows == self._model.GRID_ROWS:
+            return
+
+        removed = self._model.resize(cols, rows)
+        self._view.rebuild_grid_geometry()
+        self._mark_dirty()
+        self._update_status()
+
+        if removed:
+            QMessageBox.warning(
+                self, "Tiles removed",
+                f"{removed} tile(s) were outside the new grid bounds and have been removed.",
+            )
 
     def _update_status(self) -> None:
         name = self._selected_definition.name if self._selected_definition else "None"

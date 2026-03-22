@@ -142,6 +142,22 @@ class GLGridView(QOpenGLWidget):
     def refresh(self) -> None:
         self.update()
 
+    def rebuild_grid_geometry(self) -> None:
+        """Rebuild ground/grid VBOs after a grid resize and reset the camera."""
+        if not self._ready:
+            return
+        self.makeCurrent()
+        if self._ground_vao:
+            glDeleteVertexArrays(1, [self._ground_vao])
+            glDeleteBuffers(1, [self._ground_vbo])
+        if self._grid_vao:
+            glDeleteVertexArrays(1, [self._grid_vao])
+            glDeleteBuffers(1, [self._grid_vbo])
+        self._build_static_geometry()
+        self._reset_camera()
+        self.doneCurrent()
+        self.update()
+
     def add_definitions(self, definitions: List[TileDefinition]) -> None:
         """Upload VBOs for new definitions without clearing existing cached tiles."""
         if not self._ready:

@@ -123,7 +123,7 @@ class PalettePanel(QWidget):
             if page is not None:
                 lst = page.findChild(QListWidget)
                 if lst is not None:
-                    lst.clearSelection()
+                    lst.setCurrentRow(-1)
 
     def _on_tab_close_requested(self, index: int) -> None:
         folder_path = self._tabs.tabBar().tabData(index)

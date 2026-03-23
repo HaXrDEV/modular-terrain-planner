@@ -2,9 +2,11 @@ import os
 from typing import Dict, List, Optional
 
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QImageReader
 from PyQt5.QtWidgets import (
     QMainWindow, QSplitter, QFileDialog, QMessageBox, QStatusBar,
     QAction, QMenuBar, QDialog, QDialogButtonBox, QFormLayout, QSpinBox,
+    QDoubleSpinBox, QToolBar, QSlider, QLabel,
 )
 
 from models.grid_model import GridModel
@@ -36,6 +38,8 @@ class MainWindow(QMainWindow):
         self._pending_rotation: int = 0
         self._project_path: Optional[str] = None
         self._is_dirty: bool = False
+        self._ground_image: Optional[tuple] = None  # (path, [x, y, w, h])
+        self._ground_image_aspect: float = 1.0
 
         # Multi-folder tracking
         self._all_definitions: Dict[str, TileDefinition] = {}
@@ -58,6 +62,22 @@ class MainWindow(QMainWindow):
         # Menu bar
         self._build_menu()
 
+        # Ground image toolbar (hidden until an image is loaded)
+        self._img_toolbar = QToolBar("Ground Image", self)
+        self._img_toolbar.setMovable(False)
+        self._img_toolbar.addWidget(QLabel("  Battle map scale: "))
+        self._img_scale_slider = QSlider(Qt.Horizontal)
+        self._img_scale_slider.setRange(10, 8000)   # internal = cells × 10
+        self._img_scale_slider.setValue(self._model.GRID_COLS * 10)
+        self._img_scale_slider.setFixedWidth(400)
+        self._img_scale_slider.setToolTip("Image width in grid cells")
+        self._img_toolbar.addWidget(self._img_scale_slider)
+        self._img_scale_label = QLabel("  80 cells  ")
+        self._img_toolbar.addWidget(self._img_scale_label)
+        self._img_toolbar.addWidget(QLabel("  (Alt + drag to move)"))
+        self.addToolBar(Qt.TopToolBarArea, self._img_toolbar)
+        self._img_toolbar.hide()
+
         # Connections
         self._palette.tile_selected.connect(self._on_tile_selected)
         self._palette.load_folder_clicked.connect(self._on_load_folder)
@@ -67,6 +87,9 @@ class MainWindow(QMainWindow):
         self._view.tile_place_requested.connect(self._on_tile_placed)
         self._view.tile_remove_requested.connect(self._on_tile_removed)
         self._view.rotate_requested.connect(self._on_rotate)
+        self._view.ground_image_rect_changed.connect(self._on_ground_image_moved)
+
+        self._img_scale_slider.valueChanged.connect(self._on_img_scale_changed)
 
         self._update_title()
         self._update_status()
@@ -135,6 +158,16 @@ class MainWindow(QMainWindow):
         act_grid_size.triggered.connect(self._on_grid_size)
         edit_menu.addAction(act_grid_size)
 
+        edit_menu.addSeparator()
+
+        act_set_img = QAction("Set &Ground Image…", self)
+        act_set_img.triggered.connect(self._on_set_ground_image)
+        edit_menu.addAction(act_set_img)
+
+        act_clear_img = QAction("&Clear Ground Image", self)
+        act_clear_img.triggered.connect(self._on_clear_ground_image)
+        edit_menu.addAction(act_clear_img)
+
     # ------------------------------------------------------------------
     # Session restore
     # ------------------------------------------------------------------
@@ -173,7 +206,8 @@ class MainWindow(QMainWindow):
         self._palette.add_folder_tab(folder, definitions)
 
     def _apply_project(self, folders: list, tile_records: list,
-                       grid_cols: int = 40, grid_rows: int = 40) -> None:
+                       grid_cols: int = 40, grid_rows: int = 40,
+                       ground_image=None) -> None:
         """
         Clear the current session and apply a loaded project.
         Missing folders or unresolvable stl_paths are skipped with a warning.
@@ -208,6 +242,17 @@ class MainWindow(QMainWindow):
 
         self._view.refresh()
         self._update_status()
+
+        # Restore ground image
+        if ground_image and os.path.isfile(ground_image["path"]):
+            rect = ground_image["rect"]
+            self._view.set_ground_image(ground_image["path"], rect)
+            self._ground_image = (ground_image["path"], rect)
+            self._ground_image_aspect = rect[2] / max(rect[3], 1e-6)
+            self._show_img_toolbar(rect)
+        else:
+            self._ground_image = None
+            self._img_toolbar.hide()
 
         warnings = []
         if missing_folders:
@@ -254,9 +299,12 @@ class MainWindow(QMainWindow):
         self._pending_rotation = 0
         self._project_path = None
         self._is_dirty = False
+        self._ground_image = None
+        self._img_toolbar.hide()
         # Rebuild palette (clear all tabs) and GL cache
         self._palette.clear_all_tabs()
         self._view.load_definitions([])
+        self._view.clear_ground_image()
         self._update_title()
         self._update_status()
 
@@ -267,11 +315,11 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            folders, tile_records, grid_cols, grid_rows = load_project(path)
+            folders, tile_records, grid_cols, grid_rows, ground_image = load_project(path)
         except Exception as exc:
             QMessageBox.critical(self, "Open failed", str(exc))
             return
-        self._apply_project(folders, tile_records, grid_cols, grid_rows)
+        self._apply_project(folders, tile_records, grid_cols, grid_rows, ground_image)
         self._project_path = path
         self._is_dirty = False
         self._update_title()
@@ -296,7 +344,8 @@ class MainWindow(QMainWindow):
                        for i in range(self._palette.tab_count())
                        if self._palette.folder_for_tab(i)]
             save_project(path, folders, self._model.all_placed(),
-                         self._model.GRID_COLS, self._model.GRID_ROWS)
+                         self._model.GRID_COLS, self._model.GRID_ROWS,
+                         self._ground_image)
         except Exception as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
             return
@@ -450,6 +499,118 @@ class MainWindow(QMainWindow):
                 self, "Tiles removed",
                 f"{removed} tile(s) were outside the new grid bounds and have been removed.",
             )
+
+    def _on_set_ground_image(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Ground Image", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*)"
+        )
+        if not path:
+            return
+
+        # Use existing rect as default if re-loading the same image,
+        # otherwise fit the image's aspect ratio within the grid and center it.
+        if self._ground_image and self._ground_image[0] == path:
+            default_rect = list(self._ground_image[1])
+        else:
+            gcols = float(self._model.GRID_COLS)
+            grows = float(self._model.GRID_ROWS)
+            reader = QImageReader(path)
+            sz = reader.size()
+            if sz.isValid() and sz.width() > 0 and sz.height() > 0:
+                img_aspect = sz.width() / sz.height()
+                if img_aspect >= gcols / grows:
+                    w, h = gcols, gcols / img_aspect
+                else:
+                    w, h = grows * img_aspect, grows
+            else:
+                w, h = gcols, grows
+            default_rect = [(gcols - w) / 2, (grows - h) / 2, w, h]
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Ground Image Size")
+        layout = QFormLayout(dlg)
+
+        x_spin = QDoubleSpinBox()
+        x_spin.setRange(-400.0, 400.0)
+        x_spin.setDecimals(1)
+        x_spin.setValue(default_rect[0])
+        layout.addRow("X offset (cells):", x_spin)
+
+        y_spin = QDoubleSpinBox()
+        y_spin.setRange(-400.0, 400.0)
+        y_spin.setDecimals(1)
+        y_spin.setValue(default_rect[1])
+        layout.addRow("Y offset (cells):", y_spin)
+
+        w_spin = QDoubleSpinBox()
+        w_spin.setRange(1.0, 800.0)
+        w_spin.setDecimals(1)
+        w_spin.setValue(default_rect[2])
+        layout.addRow("Width (cells):", w_spin)
+
+        h_spin = QDoubleSpinBox()
+        h_spin.setRange(1.0, 800.0)
+        h_spin.setDecimals(1)
+        h_spin.setValue(default_rect[3])
+        layout.addRow("Height (cells):", h_spin)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addRow(buttons)
+
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        rect = [x_spin.value(), y_spin.value(), w_spin.value(), h_spin.value()]
+        self._view.set_ground_image(path, rect)
+        self._ground_image = (path, rect)
+        self._ground_image_aspect = rect[2] / max(rect[3], 1e-6)
+        self._show_img_toolbar(rect)
+        self._mark_dirty()
+
+    def _on_clear_ground_image(self) -> None:
+        if self._ground_image is None:
+            return
+        self._view.clear_ground_image()
+        self._ground_image = None
+        self._img_toolbar.hide()
+        self._mark_dirty()
+
+    def _on_img_scale_changed(self, value: int) -> None:
+        """Scale the ground image around its center when the toolbar slider moves."""
+        if not self._ground_image:
+            return
+        new_w = value / 10.0
+        new_h = new_w / max(self._ground_image_aspect, 1e-6)
+        rect = self._ground_image[1]
+        cx = rect[0] + rect[2] / 2.0
+        cy = rect[1] + rect[3] / 2.0
+        new_rect = [cx - new_w / 2.0, cy - new_h / 2.0, new_w, new_h]
+        self._view.set_ground_image_rect(new_rect)
+        self._ground_image = (self._ground_image[0], new_rect)
+        self._img_scale_label.setText(f"  {new_w:.1f} cells  ")
+        self._mark_dirty()
+
+    def _on_ground_image_moved(self, rect: list) -> None:
+        """Receive rect updates from Alt+drag in the GL view."""
+        if not self._ground_image:
+            return
+        self._ground_image = (self._ground_image[0], rect)
+        self._img_scale_slider.blockSignals(True)
+        self._img_scale_slider.setValue(max(10, int(round(rect[2] * 10))))
+        self._img_scale_slider.blockSignals(False)
+        self._img_scale_label.setText(f"  {rect[2]:.1f} cells  ")
+        self._mark_dirty()
+
+    def _show_img_toolbar(self, rect: list) -> None:
+        """Sync the toolbar slider/label to *rect* and show the toolbar."""
+        self._img_scale_slider.blockSignals(True)
+        self._img_scale_slider.setValue(max(10, int(round(rect[2] * 10))))
+        self._img_scale_slider.blockSignals(False)
+        self._img_scale_label.setText(f"  {rect[2]:.0f} cells  ")
+        self._img_toolbar.show()
 
     def _update_status(self) -> None:
         name = self._selected_definition.name if self._selected_definition else "None"

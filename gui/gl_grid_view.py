@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from PyQt5.QtCore import Qt, QPoint, pyqtSignal
-from PyQt5.QtGui import QMatrix4x4, QVector3D, QVector4D
+from PyQt5.QtGui import QImage, QMatrix4x4, QVector3D, QVector4D
 from PyQt5.QtWidgets import QOpenGLWidget, QMessageBox
 
 try:
@@ -28,14 +28,19 @@ try:
         GL_FRAGMENT_SHADER, GL_LINES, GL_LINK_STATUS, GL_STATIC_DRAW,
         GL_TRIANGLES, GL_VERTEX_SHADER, GL_BLEND, GL_SRC_ALPHA,
         GL_ONE_MINUS_SRC_ALPHA,
+        GL_TEXTURE_2D, GL_TEXTURE0, GL_LINEAR, GL_CLAMP_TO_EDGE,
+        GL_RGBA, GL_UNSIGNED_BYTE, GL_TEXTURE_MIN_FILTER, GL_TEXTURE_MAG_FILTER,
+        GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T,
         glAttachShader, glBindBuffer, glBindVertexArray, glBlendFunc,
         glBufferData, glClear, glClearColor, glCompileShader, glCreateProgram,
         glCreateShader, glDeleteBuffers, glDeleteShader, glDeleteVertexArrays,
         glDisable, glDrawArrays, glEnable, glEnableVertexAttribArray,
         glGenBuffers, glGenVertexArrays, glGetProgramInfoLog, glGetProgramiv,
         glGetShaderInfoLog, glGetShaderiv, glGetUniformLocation, glLinkProgram,
-        glLineWidth, glShaderSource, glUniform1f, glUniform3f, glUniform4f,
-        glUniformMatrix4fv, glUseProgram, glVertexAttribPointer, glViewport,
+        glLineWidth, glShaderSource, glUniform1f, glUniform1i, glUniform3f,
+        glUniform4f, glUniformMatrix4fv, glUseProgram, glVertexAttribPointer,
+        glViewport, glGenTextures, glBindTexture, glTexImage2D, glTexParameteri,
+        glDeleteTextures, glActiveTexture,
     )
     _GL_OK = True
 except ImportError:
@@ -68,16 +73,38 @@ out vec4 FragColor;
 void main() { FragColor = uColor; }
 """
 
+_TEX_VERT = """\
+#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 uMVP;
+uniform vec4 uTexRect;
+out vec2 vUV;
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vUV = vec2((aPos.x - uTexRect.x) / uTexRect.z,
+               (aPos.y - uTexRect.y) / uTexRect.w);
+}
+"""
+
+_TEX_FRAG = """\
+#version 330 core
+in vec2 vUV;
+uniform sampler2D uTex;
+out vec4 FragColor;
+void main() { FragColor = texture(uTex, vUV); }
+"""
+
 
 # ---------------------------------------------------------------------------
 # GLGridView
 # ---------------------------------------------------------------------------
 
 class GLGridView(QOpenGLWidget):
-    tile_place_requested  = pyqtSignal(int, int)
-    tile_remove_requested = pyqtSignal(int, int)
-    rotate_requested      = pyqtSignal()
-    hover_cell_changed    = pyqtSignal(int, int)
+    tile_place_requested       = pyqtSignal(int, int)
+    tile_remove_requested      = pyqtSignal(int, int)
+    rotate_requested           = pyqtSignal()
+    hover_cell_changed         = pyqtSignal(int, int)
+    ground_image_rect_changed  = pyqtSignal(list)
 
     # Camera defaults
     _DEFAULT_AZ   = 45.0
@@ -102,6 +129,11 @@ class GLGridView(QOpenGLWidget):
         self._hover_cell: Tuple[int, int]  = (-1, -1)
         self._mouse_screen: Tuple[int, int] = (0, 0)
 
+        # Image drag state (Alt + left-drag)
+        self._img_dragging: bool = False
+        self._img_drag_start_world: Optional[Tuple[float, float]] = None
+        self._img_drag_start_rect: Optional[list] = None
+
         # Pending placement
         self._pending_def: Optional[TileDefinition] = None
         self._pending_rot: int = 0
@@ -109,10 +141,19 @@ class GLGridView(QOpenGLWidget):
         # GPU resources (populated in initializeGL / load_definitions)
         self._mesh_prog  = 0
         self._flat_prog  = 0
+        self._tex_prog   = 0
         self._mesh_cache: Dict[Tuple[str, int], Tuple[int, int, int]] = {}
         self._ground_vao = self._ground_vbo = self._ground_n = 0
         self._grid_vao   = self._grid_vbo   = self._grid_n   = 0
         self._ready      = False  # True after initializeGL succeeds
+
+        # Ground image texture
+        self._tex_id:   int  = 0
+        self._img_rect: list = [0.0, 0.0,
+                                float(grid_model.GRID_COLS),
+                                float(grid_model.GRID_ROWS)]
+        self._img_vao = self._img_vbo = self._img_n = 0
+        self._u_tex_mvp = self._u_tex_rect = self._u_tex_sampler = 0
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -143,6 +184,76 @@ class GLGridView(QOpenGLWidget):
 
     def refresh(self) -> None:
         self.update()
+
+    def set_ground_image(self, path: str, rect: list) -> None:
+        """Load an image from *path* and render it on the ground plane at *rect* (x, y, w, h)."""
+        if not self._ready:
+            return
+        self.makeCurrent()
+        if self._tex_id:
+            glDeleteTextures(1, [self._tex_id])
+            self._tex_id = 0
+        img = QImage(path).convertToFormat(QImage.Format_RGBA8888).mirrored(False, True)
+        if img.isNull():
+            self.doneCurrent()
+            return
+        ptr = img.bits()
+        ptr.setsize(img.byteCount())
+        data = np.frombuffer(ptr, dtype=np.uint8).copy()
+        self._tex_id = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self._tex_id)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width(), img.height(),
+                     0, GL_RGBA, GL_UNSIGNED_BYTE, data)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        self._img_rect = list(rect)
+        self._rebuild_image_quad()
+        self.doneCurrent()
+        self.update()
+
+    def clear_ground_image(self) -> None:
+        """Remove the ground image texture."""
+        if not self._ready or not self._tex_id:
+            return
+        self.makeCurrent()
+        glDeleteTextures(1, [self._tex_id])
+        self._tex_id = 0
+        if self._img_vao:
+            glDeleteVertexArrays(1, [self._img_vao])
+            glDeleteBuffers(1, [self._img_vbo])
+            self._img_vao = self._img_vbo = self._img_n = 0
+        self.doneCurrent()
+        self.update()
+
+    def set_ground_image_rect(self, rect: list) -> None:
+        """Update the image position/size without reloading the texture (used by scale slider)."""
+        if not self._tex_id:
+            return
+        self._img_rect = list(rect)
+        self.makeCurrent()
+        self._rebuild_image_quad()
+        self.doneCurrent()
+        self.update()
+
+    def _rebuild_image_quad(self) -> None:
+        """(Re)build the VAO for the ground image quad."""
+        if self._img_vao:
+            glDeleteVertexArrays(1, [self._img_vao])
+            glDeleteBuffers(1, [self._img_vbo])
+            self._img_vao = self._img_vbo = self._img_n = 0
+        x, y, w, h = self._img_rect
+        z = -0.04  # image quad — between ground and grid lines
+        verts = np.array([
+            x,     y,     z,
+            x + w, y,     z,
+            x + w, y + h, z,
+            x,     y,     z,
+            x + w, y + h, z,
+            x,     y + h, z,
+        ], dtype=np.float32)
+        self._img_vao, self._img_vbo, self._img_n = _upload_geometry(verts, 3)
 
     def rebuild_grid_geometry(self) -> None:
         """Rebuild ground/grid VBOs after a grid resize and reset the camera."""
@@ -184,6 +295,7 @@ class GLGridView(QOpenGLWidget):
         try:
             self._mesh_prog = self._build_program(_MESH_VERT, _MESH_FRAG)
             self._flat_prog = self._build_program(_FLAT_VERT, _FLAT_FRAG)
+            self._tex_prog  = self._build_program(_TEX_VERT,  _TEX_FRAG)
 
             # Uniform locations — mesh
             p = self._mesh_prog
@@ -197,6 +309,12 @@ class GLGridView(QOpenGLWidget):
             p = self._flat_prog
             self._u_flat_mvp = glGetUniformLocation(p, b"uMVP")
             self._u_flat_col = glGetUniformLocation(p, b"uColor")
+
+            # Uniform locations — textured ground image
+            p = self._tex_prog
+            self._u_tex_mvp     = glGetUniformLocation(p, b"uMVP")
+            self._u_tex_rect    = glGetUniformLocation(p, b"uTexRect")
+            self._u_tex_sampler = glGetUniformLocation(p, b"uTex")
 
             glEnable(GL_DEPTH_TEST)
             glClearColor(0.10, 0.10, 0.12, 1.0)
@@ -230,6 +348,20 @@ class GLGridView(QOpenGLWidget):
         glUniform4f(self._u_flat_col, 0.22, 0.22, 0.25, 1.0)
         glBindVertexArray(self._ground_vao)
         glDrawArrays(GL_TRIANGLES, 0, self._ground_n)
+
+        # --- Ground image ---
+        if self._tex_id and self._img_n:
+            glUseProgram(self._tex_prog)
+            glUniformMatrix4fv(self._u_tex_mvp, 1, GL_FALSE, pv_arr)
+            glUniform4f(self._u_tex_rect, *self._img_rect)
+            glActiveTexture(GL_TEXTURE0)
+            glBindTexture(GL_TEXTURE_2D, self._tex_id)
+            glUniform1i(self._u_tex_sampler, 0)
+            glBindVertexArray(self._img_vao)
+            glDrawArrays(GL_TRIANGLES, 0, self._img_n)
+            glBindVertexArray(0)
+            glUseProgram(self._flat_prog)
+            glUniformMatrix4fv(self._u_flat_mvp, 1, GL_FALSE, pv_arr)
 
         glUniform4f(self._u_flat_col, 0.45, 0.45, 0.50, 1.0)
         glLineWidth(1.0)
@@ -317,7 +449,7 @@ class GLGridView(QOpenGLWidget):
         """Build ground plane and grid line geometry."""
         cols = self._model.GRID_COLS
         rows = self._model.GRID_ROWS
-        z = -0.005  # just below tile floor
+        z = -0.06  # ground plane — well below tile floor
 
         # Ground quad (2 triangles)
         ground = np.array([
@@ -332,7 +464,7 @@ class GLGridView(QOpenGLWidget):
 
         # Grid lines
         verts: list = []
-        gz = z + 0.001
+        gz = -0.02  # grid lines — above image, below tiles
         for i in range(cols + 1):
             verts += [float(i), 0.0, gz, float(i), float(rows), gz]
         for j in range(rows + 1):
@@ -442,9 +574,17 @@ class GLGridView(QOpenGLWidget):
         self._drag_button = event.button()
 
         if event.button() == Qt.LeftButton:
-            gx, gy = self._hover_cell
-            if gx >= 0:
-                self.tile_place_requested.emit(gx, gy)
+            if self._tex_id and (event.modifiers() & Qt.AltModifier):
+                # Start image drag
+                world = self._ray_to_world(event.x(), event.y(), 0.0)
+                if world:
+                    self._img_dragging = True
+                    self._img_drag_start_world = world
+                    self._img_drag_start_rect = list(self._img_rect)
+            else:
+                gx, gy = self._hover_cell
+                if gx >= 0:
+                    self.tile_place_requested.emit(gx, gy)
         elif event.button() == Qt.RightButton:
             # Right-click with no movement = remove tile
             self._drag_start = event.pos()
@@ -476,6 +616,16 @@ class GLGridView(QOpenGLWidget):
             self._target[0] += (-right.x() * dx + fwd_flat.x() * dy) * pan_speed
             self._target[1] += (-right.y() * dx + fwd_flat.y() * dy) * pan_speed
             self.update()
+        elif self._img_dragging and self._img_drag_start_world is not None:
+            world = self._ray_to_world(event.x(), event.y(), 0.0)
+            if world:
+                dx = world[0] - self._img_drag_start_world[0]
+                dy = world[1] - self._img_drag_start_world[1]
+                self._img_rect[0] = self._img_drag_start_rect[0] + dx
+                self._img_rect[1] = self._img_drag_start_rect[1] + dy
+                self._rebuild_image_quad()
+                self.ground_image_rect_changed.emit(list(self._img_rect))
+                self.update()
         else:
             # Update hover ghost
             self._mouse_screen = (event.x(), event.y())
@@ -486,6 +636,10 @@ class GLGridView(QOpenGLWidget):
                 self.update()
 
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self._img_dragging:
+            self._img_dragging = False
+            self._img_drag_start_world = None
+            self._img_drag_start_rect = None
         # Short right-click (no drag) = remove tile
         if event.button() == Qt.RightButton and hasattr(self, '_drag_start'):
             d = event.pos() - self._drag_start

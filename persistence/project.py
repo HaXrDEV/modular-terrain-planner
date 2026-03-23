@@ -11,7 +11,7 @@ looking up each stl_path in the rebuilt definition map.
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-PROJECT_VERSION = 3
+PROJECT_VERSION = 4
 
 
 def save_project(
@@ -20,6 +20,7 @@ def save_project(
     placed_tiles,
     grid_cols: int = 40,
     grid_rows: int = 40,
+    ground_image: Optional[tuple] = None,
 ) -> None:
     """
     Write the current session to *path* (.mtp / JSON).
@@ -31,6 +32,7 @@ def save_project(
     placed_tiles : iterable of PlacedTile objects
     grid_cols    : number of grid columns
     grid_rows    : number of grid rows
+    ground_image : optional (path_str, [x, y, w, h]) tuple
     """
     data: Dict[str, Any] = {
         "version": PROJECT_VERSION,
@@ -48,17 +50,21 @@ def save_project(
             for pt in placed_tiles
         ],
     }
+    if ground_image:
+        data["ground_image"] = {"path": ground_image[0], "rect": list(ground_image[1])}
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2)
 
 
-def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]], int, int]:
+def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]], int, int, Optional[Dict[str, Any]]]:
     """
-    Read a project file and return ``(folders, tile_records, grid_cols, grid_rows)``.
+    Read a project file and return
+    ``(folders, tile_records, grid_cols, grid_rows, ground_image)``.
 
     ``folders`` is the ordered list of STL folder paths.
     ``tile_records`` is a list of dicts with keys:
-        stl_path, grid_x, grid_y, rotation
+        stl_path, grid_x, grid_y, rotation, z_offset
+    ``ground_image`` is None or {"path": str, "rect": [x, y, w, h]}.
     Raises ValueError / OSError on corrupt or missing files.
     """
     with open(path, encoding="utf-8") as fh:
@@ -80,4 +86,11 @@ def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]], int, int]:
         }
         for t in data.get("tiles", [])
     ]
-    return folders, tiles, grid_cols, grid_rows
+    gi_raw = data.get("ground_image")
+    ground_image: Optional[Dict[str, Any]] = None
+    if isinstance(gi_raw, dict) and "path" in gi_raw and "rect" in gi_raw:
+        ground_image = {
+            "path": str(gi_raw["path"]),
+            "rect": [float(v) for v in gi_raw["rect"]],
+        }
+    return folders, tiles, grid_cols, grid_rows, ground_image

@@ -13,9 +13,10 @@ A desktop tool for designing tabletop RPG dungeon layouts by placing modular ter
 - **Tile model previewer** — 3D preview of the selected tile in the palette; orbit and zoom independently
 - **Multi-folder tabs** — Load multiple STL folders as separate tabs and switch between them instantly
 - **Auto-detect tile size** — Reads bounding boxes from STL files and maps them to grid cells (1 cell = 25 mm)
-- **Snap-to-grid placement** — Left-click to place, right-click to remove
+- **Snap-to-grid placement** — Left-click to place, right-click to remove; pending tile centers on cursor
 - **Ghost preview** — Hover to see where a tile will land before placing it
-- **Tile rotation** — Press R to rotate the pending tile 90°
+- **Tile rotation** — Press R to rotate the pending tile 90°; rotation pivots around the cursor
+- **Battle map overlay** — Load any image (PNG/JPG/BMP) as a ground-plane texture; position and scale it to match the grid
 - **Print list export** — Export tile counts to CSV for your slicer/print queue
 - **Inches heuristic** — Automatically detects and converts inch-unit STL files (e.g. OpenForge tiles)
 
@@ -71,7 +72,8 @@ python main.py
    - **Scroll wheel** — Zoom in / out
    - **Home** — Reset camera to default position
 7. **Manage folders** — Click the × on a tab to unload that folder. Tiles already placed on the grid remain.
-8. **Export** — Click *Export CSV* to save a print list with tile names and quantities.
+8. **Battle map overlay** — Go to *Edit → Set Ground Image…*, pick an image file, then set its X/Y offset and width/height in grid cells so it lines up with your tile grid. Use *Edit → Clear Ground Image* to remove it.
+9. **Export** — Click *Export CSV* to save a print list with tile names and quantities.
 
 ---
 

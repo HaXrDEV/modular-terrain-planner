@@ -36,6 +36,48 @@ def parse_bounding_box(stl_path: str) -> Tuple[float, float, float]:
     return dx, dy, dz
 
 
+# LOD grid resolutions: (LOD1, LOD2).  Larger = finer = more triangles.
+# LOD1 at 85³ is visually indistinguishable from the raw mesh at normal viewing
+# distances. LOD2 at 25³ is used only for tiles far from the camera.
+_LOD_GRIDS = (85, 25)
+
+
+def _decimate(verts: np.ndarray, grid: int) -> np.ndarray:
+    """
+    Vertex-clustering decimation.  Merges vertices that fall in the same cell
+    of a *grid*³ lattice, remaps triangles to the merged vertices, and removes
+    any triangle that collapses to fewer than 3 distinct vertices.
+
+    Because shared edges use the same representative vertices on both sides the
+    surface stays watertight — no holes.
+
+    verts : (N, 3, 3) float32  — normalised triangles
+    returns (M, 3, 3) float32  — decimated triangles, M <= N
+    """
+    g = grid
+    flat = verts.reshape(-1, 3).astype(np.float64)         # (N*3, 3)
+    cell = np.clip((flat * g).astype(np.int32), 0, g - 1)
+    keys = cell[:, 0] * g * g + cell[:, 1] * g + cell[:, 2]
+
+    # Map each original vertex to its cluster's representative index
+    unique_keys, inverse = np.unique(keys, return_inverse=True)
+
+    # Compute each cluster's representative vertex (centroid of its members)
+    rep = np.zeros((len(unique_keys), 3), dtype=np.float64)
+    counts = np.zeros(len(unique_keys), dtype=np.int64)
+    np.add.at(rep, inverse, flat)
+    np.add.at(counts, inverse, 1)
+    rep /= counts[:, np.newaxis]
+
+    # Remap triangle indices; discard degenerate triangles
+    tri_idx = inverse.reshape(-1, 3)                        # (N, 3)
+    i0, i1, i2 = tri_idx[:, 0], tri_idx[:, 1], tri_idx[:, 2]
+    valid = (i0 != i1) & (i1 != i2) & (i0 != i2)
+    tri_idx = tri_idx[valid]
+
+    return rep[tri_idx].astype(np.float32)                  # (M, 3, 3)
+
+
 def load_tile_mesh(
     stl_path: str,
     min_x: float,
@@ -61,7 +103,7 @@ def load_tile_mesh(
     sy = dy if dy > 0 else 1.0
     sz = dz if dz > 0 else 1.0
 
-    # Normalise in-place
+    # Normalise in-place to [0, 1]³
     verts[:, :, 0] = (verts[:, :, 0] - min_x) / sx
     verts[:, :, 1] = (verts[:, :, 1] - min_y) / sy
     verts[:, :, 2] = (verts[:, :, 2] - min_z) / sz
@@ -106,6 +148,7 @@ def load_stl_folder(folder_path: str) -> List[TileDefinition]:
             view_triangles = load_tile_mesh(
                 stl_path, min_x, min_y, min_z, dx / scale, dy / scale, dz / scale
             )
+            lod_triangles = [_decimate(view_triangles, g) for g in _LOD_GRIDS]
         except Exception as exc:
             print(f"[STL loader] Skipping '{name}': {exc}")
             continue
@@ -119,6 +162,7 @@ def load_stl_folder(folder_path: str) -> List[TileDefinition]:
             grid_z=grid_z,
             color=color,
             view_triangles=view_triangles,
+            lod_triangles=lod_triangles,
         ))
 
     return definitions

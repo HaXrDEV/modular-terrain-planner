@@ -26,8 +26,8 @@ from PyQt5.QtWidgets import QOpenGLWidget, QMessageBox
 
 try:
     from OpenGL.GL import (
-        GL_ARRAY_BUFFER, GL_BACK, GL_COLOR_BUFFER_BIT, GL_COMPILE_STATUS,
-        GL_CULL_FACE, GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST, GL_DYNAMIC_DRAW, GL_FALSE, GL_FLOAT,
+        GL_ARRAY_BUFFER, GL_COLOR_BUFFER_BIT, GL_COMPILE_STATUS,
+        GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST, GL_DYNAMIC_DRAW, GL_FALSE, GL_FLOAT,
         GL_FRAGMENT_SHADER, GL_LINE_LOOP, GL_LINES, GL_LINK_STATUS, GL_STATIC_DRAW,
         GL_TRIANGLES, GL_VERTEX_SHADER, GL_BLEND, GL_SRC_ALPHA,
         GL_ONE_MINUS_SRC_ALPHA,
@@ -41,7 +41,7 @@ try:
         glEnableVertexAttribArray,
         glGenBuffers, glGenVertexArrays, glGetProgramInfoLog, glGetProgramiv,
         glGetShaderInfoLog, glGetShaderiv, glGetUniformLocation, glLinkProgram,
-        glCullFace, glLineWidth, glShaderSource, glUniform1f, glUniform1i, glUniform3f,
+        glLineWidth, glShaderSource, glUniform1f, glUniform1i, glUniform3f,
         glUniform4f, glUniformMatrix4fv, glUseProgram, glVertexAttribDivisor,
         glVertexAttribPointer,
         glViewport, glGenTextures, glBindTexture, glTexImage2D, glTexParameteri,
@@ -230,8 +230,11 @@ class GLGridView(QOpenGLWidget):
         self._flat_prog  = 0
         self._tex_prog   = 0
         self._inst_prog  = 0   # instanced mesh shader
-        self._mesh_cache: Dict[str, Tuple[int, int, int]] = {}  # {path: (vao, vbo, n)}
-        self._inst_cache: Dict[str, Tuple[int, int, int]] = {}  # {path: (vao, inst_vbo, n)}
+        # Caches keyed by (stl_path, lod_level).  lod_level 0 = full quality.
+        # _mesh_cache: ghost/preview draws (per-draw uniforms, _mesh_prog)
+        # _inst_cache: instanced placed-tile draws (_inst_prog)
+        self._mesh_cache: Dict[Tuple[str, int], Tuple[int, int, int]] = {}
+        self._inst_cache: Dict[Tuple[str, int], Tuple[int, int, int]] = {}
         self._ground_vao = self._ground_vbo = self._ground_n = 0
         self._grid_vao   = self._grid_vbo   = self._grid_n   = 0
         self._sel_vao    = self._sel_vbo    = 0   # scratch VAO for selection highlights
@@ -264,11 +267,10 @@ class GLGridView(QOpenGLWidget):
             self._pending_definitions = definitions
             return
         self.makeCurrent()
-        self._mesh_cache.clear()
-        self._inst_cache.clear()
+        self._mesh_cache.clear()   # {(path, lod): ...}
+        self._inst_cache.clear()   # {(path, lod): ...}
         for defn in definitions:
             self._upload_tile(defn)
-        self._instances_dirty = True
         self.doneCurrent()
         self.update()
 
@@ -306,7 +308,6 @@ class GLGridView(QOpenGLWidget):
         self.update()
 
     def refresh(self) -> None:
-        self._instances_dirty = True
         self.update()
 
     def set_ground_image(self, path: str, rect: list) -> None:
@@ -446,8 +447,6 @@ class GLGridView(QOpenGLWidget):
             self._u_tex_sampler = glGetUniformLocation(p, b"uTex")
 
             glEnable(GL_DEPTH_TEST)
-            glEnable(GL_CULL_FACE)
-            glCullFace(GL_BACK)
             glClearColor(*self._bg, 1.0)
 
             self._build_static_geometry()
@@ -480,9 +479,9 @@ class GLGridView(QOpenGLWidget):
         if not self._ready:
             return
 
-        # Rebuild per-instance GPU data if the model changed since last frame
-        if self._instances_dirty:
-            self._rebuild_instance_buffers()
+        # Rebuild per-instance GPU data every frame — LOD selection depends on
+        # camera distance, which changes whenever the camera moves.
+        self._rebuild_instance_buffers()
 
         glEnable(GL_DEPTH_TEST)   # QPainter may have disabled this in a prior frame
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -518,13 +517,13 @@ class GLGridView(QOpenGLWidget):
         glDrawArrays(GL_LINES, 0, self._grid_n)
         glBindVertexArray(0)
 
-        # --- Placed tiles (instanced — one draw call per unique mesh) ---
+        # --- Placed tiles (instanced — one draw call per unique mesh+LOD) ---
         glUseProgram(self._inst_prog)
         glUniformMatrix4fv(self._u_inst_pv, 1, GL_FALSE, pv_arr)
-        for path, count in self._inst_counts.items():
-            if count == 0 or path not in self._inst_cache:
+        for key, count in self._inst_counts.items():
+            if count == 0:
                 continue
-            inst_vao, _inst_vbo, n_verts = self._inst_cache[path]
+            inst_vao, _inst_vbo, n_verts = self._inst_cache[key]
             glBindVertexArray(inst_vao)
             glDrawArraysInstanced(GL_TRIANGLES, 0, n_verts, count)
         glBindVertexArray(0)
@@ -633,7 +632,7 @@ class GLGridView(QOpenGLWidget):
 
     def _draw_tile(self, pt: PlacedTile, proj: QMatrix4x4, view: QMatrix4x4, alpha: float) -> None:
         defn = pt.definition
-        key  = defn.stl_path
+        key  = (defn.stl_path, 0)   # ghost draws always use full-quality LOD 0
 
         # Lazily build VBO if missing
         if key not in self._mesh_cache:
@@ -778,23 +777,27 @@ class GLGridView(QOpenGLWidget):
     # ------------------------------------------------------------------
 
     def _upload_tile(self, defn: TileDefinition) -> None:
-        """Build and cache VAOs for defn — one for ghost draws, one for instanced draws."""
-        if defn.view_triangles is None or len(defn.view_triangles) == 0:
-            return
-        vdata = _build_vdata(defn.view_triangles)
-        if len(vdata) == 0:
-            return
+        """Upload VAOs for all LOD levels of defn."""
+        all_tris = [defn.view_triangles] + list(defn.lod_triangles)
+        for lod, tris in enumerate(all_tris):
+            if tris is None or len(tris) == 0:
+                continue
+            vdata = _build_vdata(tris)
+            if len(vdata) == 0:
+                continue
+            self._upload_tile_lod(defn.stl_path, lod, vdata)
 
-        # Ghost VAO (attribs 0, 1 only — used by _draw_tile for ghost/preview draws)
+    def _upload_tile_lod(self, path: str, lod: int, vdata: np.ndarray) -> None:
+        """Upload one LOD level's VBO data and create both ghost and instanced VAOs."""
+        # Ghost VAO (attribs 0, 1 — used by _draw_tile for ghost/preview draws)
         ghost_vao, mesh_vbo, n_verts = _upload_geometry(vdata, 6)
-        self._mesh_cache[defn.stl_path] = (ghost_vao, mesh_vbo, n_verts)
+        self._mesh_cache[(path, lod)] = (ghost_vao, mesh_vbo, n_verts)
 
-        # Instanced VAO (attribs 0-5, per-vertex divisor=0, per-instance divisor=1)
+        # Instanced VAO (attribs 0-5, per-instance divisor=1 on attribs 2-5)
         INST_STRIDE = 11 * 4   # 11 floats × 4 bytes = 44 bytes
         inst_vao = int(glGenVertexArrays(1))
         glBindVertexArray(inst_vao)
 
-        # Re-bind mesh VBO for per-vertex attribs 0 (pos) and 1 (norm)
         glBindBuffer(GL_ARRAY_BUFFER, mesh_vbo)
         mesh_stride = 6 * 4
         glEnableVertexAttribArray(0)
@@ -802,7 +805,6 @@ class GLGridView(QOpenGLWidget):
         glEnableVertexAttribArray(1)
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, mesh_stride, ctypes.c_void_p(12))
 
-        # Create per-instance VBO (initially empty; filled by _rebuild_instance_buffers)
         inst_vbo = int(glGenBuffers(1))
         glBindBuffer(GL_ARRAY_BUFFER, inst_vbo)
         glEnableVertexAttribArray(2)
@@ -819,42 +821,64 @@ class GLGridView(QOpenGLWidget):
         glVertexAttribDivisor(5, 1)
         glBindVertexArray(0)
 
-        self._inst_cache[defn.stl_path] = (inst_vao, inst_vbo, n_verts)
+        self._inst_cache[(path, lod)] = (inst_vao, inst_vbo, n_verts)
+
+    # LOD distance thresholds (eye-to-tile distance in grid cells)
+    _LOD_DISTS = (10.0, 80.0)   # <10 → LOD0 (full), 10-80 → LOD1 (near-original), >80 → LOD2
+
+    def _lod_for_dist(self, dist: float) -> int:
+        for lod, threshold in enumerate(self._LOD_DISTS):
+            if dist < threshold:
+                return lod
+        return len(self._LOD_DISTS)
 
     def _rebuild_instance_buffers(self) -> None:
-        """Group all placed tiles by mesh and upload per-instance float data to the GPU.
-        Called at the start of paintGL when _instances_dirty is True."""
-        # Accumulate per-instance data grouped by stl_path
-        groups: Dict[str, list] = {}
+        """Group placed tiles by (mesh, lod) and upload per-instance data to the GPU."""
+        eye = self._eye_pos()
+        ex, ey, ez = eye.x(), eye.y(), eye.z()
+
+        groups: Dict[Tuple[str, int], list] = {}
         for pt in self._model.all_placed():
-            key = pt.definition.stl_path
-            if key not in self._inst_cache:
-                continue   # mesh not yet uploaded (shouldn't happen, but guard)
-            if key not in groups:
-                groups[key] = []
+            path = pt.definition.stl_path
             ew = float(pt.effective_w)
             eh = float(pt.effective_h)
             gz = float(pt.definition.grid_z)
+
+            # Eye-to-tile-centre distance for LOD selection
+            cx = pt.grid_x + ew * 0.5
+            cy = pt.grid_y + eh * 0.5
+            cz = pt.z_offset + gz * 0.5
+            dist = math.sqrt((cx - ex)**2 + (cy - ey)**2 + (cz - ez)**2)
+            lod = self._lod_for_dist(dist)
+
+            # Fall back to highest available LOD if this level wasn't generated
+            key = (path, lod)
+            while lod > 0 and key not in self._inst_cache:
+                lod -= 1
+                key = (path, lod)
+            if key not in self._inst_cache:
+                continue
+
+            if key not in groups:
+                groups[key] = []
             col = pt.definition.color
             groups[key].append((
-                pt.grid_x, pt.grid_y, pt.z_offset,              # iPos
-                math.radians(pt.rotation),                       # iRot
-                ew, eh, gz,                                      # iScale
-                col.redF(), col.greenF(), col.blueF(), 1.0,      # iColor
+                pt.grid_x, pt.grid_y, pt.z_offset,
+                math.radians(pt.rotation),
+                ew, eh, gz,
+                col.redF(), col.greenF(), col.blueF(), 1.0,
             ))
 
-        # Upload each group; store instance count for the draw call
-        self._inst_counts: Dict[str, int] = {}
-        for path, instances in groups.items():
-            inst_vao, inst_vbo, _n = self._inst_cache[path]
+        # Upload each group and record instance counts for the draw loop
+        self._inst_counts: Dict[Tuple[str, int], int] = {}
+        for key, instances in groups.items():
+            inst_vao, inst_vbo, _n = self._inst_cache[key]
             data = np.array(instances, dtype=np.float32)
             glBindVertexArray(inst_vao)
             glBindBuffer(GL_ARRAY_BUFFER, inst_vbo)
             glBufferData(GL_ARRAY_BUFFER, data.nbytes, data, GL_DYNAMIC_DRAW)
             glBindVertexArray(0)
-            self._inst_counts[path] = len(instances)
-
-        self._instances_dirty = False
+            self._inst_counts[key] = len(instances)
 
     def _build_static_geometry(self) -> None:
         """Build ground plane and grid line geometry."""

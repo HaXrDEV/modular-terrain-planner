@@ -20,6 +20,9 @@ class TileDefinition:
         default_factory=lambda: np.empty((0, 3, 3), dtype=np.float32),
         compare=False,
     )
+    # Lower-resolution versions for LOD rendering.
+    # lod_triangles[0] = medium quality (LOD 1), lod_triangles[1] = low quality (LOD 2).
+    lod_triangles: list = field(default_factory=list, compare=False)
 
     @staticmethod
     def color_for_name(name: str) -> QColor:

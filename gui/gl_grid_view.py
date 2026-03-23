@@ -31,7 +31,8 @@ try:
         GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST, GL_DYNAMIC_DRAW, GL_FALSE, GL_FLOAT,
         GL_STENCIL_BUFFER_BIT, GL_STENCIL_TEST,
         GL_ALWAYS, GL_NOTEQUAL, GL_KEEP, GL_REPLACE, GL_TRUE,
-        glColorMask, glStencilFunc, glStencilOp,
+        GL_POLYGON_OFFSET_FILL,
+        glColorMask, glPolygonOffset, glStencilFunc, glStencilOp,
         GL_FRAGMENT_SHADER, GL_LINE_LOOP, GL_LINES, GL_LINK_STATUS, GL_STATIC_DRAW,
         GL_TRIANGLES, GL_VERTEX_SHADER, GL_BLEND, GL_SRC_ALPHA,
         GL_ONE_MINUS_SRC_ALPHA,
@@ -530,28 +531,39 @@ class GLGridView(QOpenGLWidget):
         glDrawArrays(GL_LINES, 0, self._grid_n)
         glBindVertexArray(0)
 
+        # --- Placed tiles (instanced — one draw call per unique mesh+LOD) ---
+        glUseProgram(self._inst_prog)
+        glUniformMatrix4fv(self._u_inst_pv, 1, GL_FALSE, pv_arr)
+        for key, count in self._inst_counts.items():
+            if count == 0:
+                continue
+            inst_vao, _inst_vbo, n_verts = self._inst_cache[key]
+            glBindVertexArray(inst_vao)
+            glDrawArraysInstanced(GL_TRIANGLES, 0, n_verts, count)
+        glBindVertexArray(0)
+
         # --- Selection outline (stencil + back-face extrusion) ---
-        # Drawn BEFORE the instanced tiles so the model surface renders on top,
-        # leaving the outline visible only at the silhouette edge.
-        # Pass 1: stamp stencil=1 where the tile mesh sits (no colour write).
-        # Pass 2: draw enlarged shell (front-faces culled) only where stencil==0 —
-        #         the ring outside the mesh that the model will NOT cover.
+        # Drawn AFTER all instanced tiles so the depth buffer is fully populated.
+        # The outline is correctly occluded by any tile in front of the selected tile.
+        # Pass 1: stamp stencil=1 where the selected tile is visible.  Polygon
+        #         offset pushes the stencil mesh slightly toward the camera so it
+        #         reliably passes the depth test against the already-drawn surface.
+        # Pass 2: draw enlarged shell (front-faces culled) only where stencil==0.
         if self._selection:
             glEnable(GL_STENCIL_TEST)
             glUseProgram(self._outline_prog)
-
-            # Disable depth writes for both passes — the depth buffer must only
-            # be written by the instanced tile draw that follows, otherwise the
-            # decimated outline mesh causes z-fighting with the rendered tiles.
             glDepthMask(GL_FALSE)
 
             # Pass 1 — write stencil, suppress colour
+            glEnable(GL_POLYGON_OFFSET_FILL)
+            glPolygonOffset(-1.0, -1.0)
             glStencilFunc(GL_ALWAYS, 1, 0xFF)
             glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE)
             glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE)
             for pt in self._selection:
                 self._draw_tile_outline(pt, proj, view, scale=1.0)
             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE)
+            glDisable(GL_POLYGON_OFFSET_FILL)
 
             # Pass 2 — draw outline only where stencil == 0
             glStencilFunc(GL_NOTEQUAL, 1, 0xFF)
@@ -564,17 +576,6 @@ class GLGridView(QOpenGLWidget):
 
             glDepthMask(GL_TRUE)
             glDisable(GL_STENCIL_TEST)
-
-        # --- Placed tiles (instanced — one draw call per unique mesh+LOD) ---
-        glUseProgram(self._inst_prog)
-        glUniformMatrix4fv(self._u_inst_pv, 1, GL_FALSE, pv_arr)
-        for key, count in self._inst_counts.items():
-            if count == 0:
-                continue
-            inst_vao, _inst_vbo, n_verts = self._inst_cache[key]
-            glBindVertexArray(inst_vao)
-            glDrawArraysInstanced(GL_TRIANGLES, 0, n_verts, count)
-        glBindVertexArray(0)
 
         # --- Ghost draws (move, paste, placement) — disable culling so semi-transparent
         #     tiles are visible from all angles regardless of winding ---

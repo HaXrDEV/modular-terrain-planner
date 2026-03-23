@@ -97,6 +97,8 @@ class MainWindow(QMainWindow):
 
         self._img_scale_slider.valueChanged.connect(self._on_img_scale_changed)
 
+        self._view.set_pan_speed(self._settings.pan_speed)
+
         self._update_title()
         self._update_status()
 
@@ -177,6 +179,10 @@ class MainWindow(QMainWindow):
         act_grid_size = QAction("&Grid Size…", self)
         act_grid_size.triggered.connect(self._on_grid_size)
         edit_menu.addAction(act_grid_size)
+
+        act_cam_speed = QAction("&Camera Speed…", self)
+        act_cam_speed.triggered.connect(self._on_camera_speed)
+        edit_menu.addAction(act_cam_speed)
 
         edit_menu.addSeparator()
 
@@ -615,6 +621,34 @@ class MainWindow(QMainWindow):
                 self, "Tiles removed",
                 f"{removed} tile(s) were outside the new grid bounds and have been removed.",
             )
+
+    def _on_camera_speed(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Camera Speed")
+        layout = QFormLayout(dlg)
+
+        # Slider: 1–20 maps to speed 0.001–0.020 (stored value × 0.001)
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(1, 30)
+        slider.setValue(max(1, min(30, round(self._settings.pan_speed * 1000))))
+        slider.setFixedWidth(200)
+        label = QLabel(f"{self._settings.pan_speed * 1000:.0f}")
+        slider.valueChanged.connect(lambda v: label.setText(str(v)))
+        layout.addRow("Speed:", slider)
+        layout.addRow("Value:", label)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addRow(buttons)
+
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        speed = slider.value() * 0.001
+        self._settings.pan_speed = speed
+        self._settings.save()
+        self._view.set_pan_speed(speed)
 
     def _on_set_ground_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

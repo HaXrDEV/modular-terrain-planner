@@ -10,6 +10,7 @@ Right-drag          Orbit camera (azimuth / elevation)
 Middle-drag         Pan camera target
 Scroll              Zoom (change camera distance)
 R key               Rotate pending tile 90°
+W/A/S/D keys        Pan camera forward / left / back / right
 Delete key          Remove tile at last hovered cell
 Home key            Reset camera to default position
 """
@@ -18,7 +19,7 @@ import math
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from PyQt5.QtCore import Qt, QPoint, pyqtSignal
+from PyQt5.QtCore import Qt, QPoint, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtGui import QImage, QMatrix4x4, QVector3D, QVector4D
 from PyQt5.QtWidgets import QOpenGLWidget, QMessageBox
@@ -132,6 +133,13 @@ class GLGridView(QOpenGLWidget):
         self._hover_pos:  Tuple[float, float] = (-1.0, -1.0)
         self._mouse_screen: Tuple[int, int]   = (0, 0)
 
+        # WASD smooth pan
+        self._pan_speed: float = 0.008   # cells per tick per unit of distance
+        self._pan_keys: set = set()
+        self._pan_timer = QTimer(self)
+        self._pan_timer.setInterval(16)   # ~60 fps
+        self._pan_timer.timeout.connect(self._on_pan_tick)
+
         # Image drag state (Alt + left-drag)
         self._img_dragging: bool = False
         self._img_drag_start_world: Optional[Tuple[float, float]] = None
@@ -176,6 +184,9 @@ class GLGridView(QOpenGLWidget):
             self._upload_tile(defn)
         self.doneCurrent()
         self.update()
+
+    def set_pan_speed(self, speed: float) -> None:
+        self._pan_speed = speed
 
     def set_pending_tile(self, definition: Optional[TileDefinition], rotation: int) -> None:
         self._pending_def = definition
@@ -685,25 +696,35 @@ class GLGridView(QOpenGLWidget):
         self.update()
 
     def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key_R:
+        key = event.key()
+        if key == Qt.Key_R:
             self.rotate_requested.emit()
-        elif event.key() == Qt.Key_Delete:
+        elif key == Qt.Key_Delete:
             gx, gy = self._hover_cell
             if gx >= 0:
                 self.tile_remove_requested.emit(gx, gy)
-        elif event.key() == Qt.Key_Home:
+        elif key == Qt.Key_Home:
             self._reset_camera()
-        elif event.key() == Qt.Key_Control:
-            # Switch ghost to free mode immediately
+        elif key == Qt.Key_Control:
             mx, my = self._mouse_screen
             fx, fy = self._compute_free_pos(mx, my)
             self._hover_pos = (fx, fy)
             self.update()
+        elif key in (Qt.Key_W, Qt.Key_A, Qt.Key_S, Qt.Key_D):
+            if not event.isAutoRepeat():
+                self._pan_keys.add(key)
+                if not self._pan_timer.isActive():
+                    self._pan_timer.start()
         else:
             super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event) -> None:
-        if event.key() == Qt.Key_Control:
+        if event.key() in (Qt.Key_W, Qt.Key_A, Qt.Key_S, Qt.Key_D):
+            if not event.isAutoRepeat():
+                self._pan_keys.discard(event.key())
+                if not self._pan_keys:
+                    self._pan_timer.stop()
+        elif event.key() == Qt.Key_Control:
             # Switch ghost back to snapped mode immediately
             mx, my = self._mouse_screen
             cell = self._compute_hover_cell(mx, my)
@@ -712,6 +733,27 @@ class GLGridView(QOpenGLWidget):
             self.update()
         else:
             super().keyReleaseEvent(event)
+
+    def _on_pan_tick(self) -> None:
+        """Called at ~60 fps while any WASD key is held; pans the camera target."""
+        az      = math.radians(self._azimuth)
+        speed   = self._distance * self._pan_speed
+        right_x, right_y =  math.sin(az), -math.cos(az)
+        fwd_x,   fwd_y   = -math.cos(az), -math.sin(az)
+
+        if Qt.Key_W in self._pan_keys:
+            self._target[0] += fwd_x * speed
+            self._target[1] += fwd_y * speed
+        if Qt.Key_S in self._pan_keys:
+            self._target[0] -= fwd_x * speed
+            self._target[1] -= fwd_y * speed
+        if Qt.Key_A in self._pan_keys:
+            self._target[0] += right_x * speed
+            self._target[1] += right_y * speed
+        if Qt.Key_D in self._pan_keys:
+            self._target[0] -= right_x * speed
+            self._target[1] -= right_y * speed
+        self.update()
 
     # ------------------------------------------------------------------
     # Shader compilation

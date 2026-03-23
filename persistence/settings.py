@@ -14,8 +14,11 @@ class AppSettings:
     _FILE = _DIR / "settings.json"
     _MAX_FOLDERS = 20
 
+    _DEFAULT_PAN_SPEED = 0.008
+
     def __init__(self) -> None:
         self.recent_folders: List[str] = []
+        self.pan_speed: float = self._DEFAULT_PAN_SPEED
 
     # ------------------------------------------------------------------
     # Load / save
@@ -27,6 +30,7 @@ class AppSettings:
             if self._FILE.exists():
                 data = json.loads(self._FILE.read_text(encoding="utf-8"))
                 self.recent_folders = [str(f) for f in data.get("recent_folders", [])]
+                self.pan_speed = float(data.get("pan_speed", self._DEFAULT_PAN_SPEED))
         except Exception:
             pass
 
@@ -34,7 +38,7 @@ class AppSettings:
         """Persist current settings to disk; silently ignores write errors."""
         try:
             self._DIR.mkdir(parents=True, exist_ok=True)
-            data = {"recent_folders": self.recent_folders}
+            data = {"recent_folders": self.recent_folders, "pan_speed": self.pan_speed}
             self._FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except Exception:
             pass

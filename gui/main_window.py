@@ -42,6 +42,11 @@ class MainWindow(QMainWindow):
         self._ground_image: Optional[tuple] = None  # (path, [x, y, w, h])
         self._ground_image_aspect: float = 1.0
 
+        # Undo / redo stacks — each entry is a state snapshot dict
+        self._undo_stack: List[dict] = []
+        self._redo_stack: List[dict] = []
+        _MAX_UNDO = 100
+
         # Multi-folder tracking
         self._all_definitions: Dict[str, TileDefinition] = {}
         self._loaded_folders: Dict[str, List[str]] = {}
@@ -154,6 +159,20 @@ class MainWindow(QMainWindow):
 
         # Edit menu
         edit_menu = mb.addMenu("&Edit")
+
+        self._act_undo = QAction("&Undo", self)
+        self._act_undo.setShortcut("Ctrl+Z")
+        self._act_undo.setEnabled(False)
+        self._act_undo.triggered.connect(self._on_undo)
+        edit_menu.addAction(self._act_undo)
+
+        self._act_redo = QAction("&Redo", self)
+        self._act_redo.setShortcut("Ctrl+Y")
+        self._act_redo.setEnabled(False)
+        self._act_redo.triggered.connect(self._on_redo)
+        edit_menu.addAction(self._act_redo)
+
+        edit_menu.addSeparator()
 
         act_grid_size = QAction("&Grid Size…", self)
         act_grid_size.triggered.connect(self._on_grid_size)
@@ -281,6 +300,90 @@ class MainWindow(QMainWindow):
             self._is_dirty = True
             self._update_title()
 
+    # ------------------------------------------------------------------
+    # Undo / redo
+    # ------------------------------------------------------------------
+
+    def _snapshot(self) -> None:
+        """Push the current state onto the undo stack and clear redo."""
+        snap = {
+            "tiles": [
+                (pt.definition, pt.grid_x, pt.grid_y, pt.rotation, pt.z_offset)
+                for pt in self._model.all_placed()
+            ],
+            "ground_image": self._ground_image,
+            "grid_cols": self._model.GRID_COLS,
+            "grid_rows": self._model.GRID_ROWS,
+        }
+        self._undo_stack.append(snap)
+        if len(self._undo_stack) > 100:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+        self._update_undo_actions()
+
+    def _restore(self, snap: dict) -> None:
+        """Restore application state from a snapshot."""
+        cols, rows = snap["grid_cols"], snap["grid_rows"]
+        size_changed = (cols != self._model.GRID_COLS or rows != self._model.GRID_ROWS)
+        self._model.GRID_COLS = cols
+        self._model.GRID_ROWS = rows
+        self._model.clear()
+        for defn, gx, gy, rot, z_off in snap["tiles"]:
+            self._model.force_place(PlacedTile(defn, gx, gy, rot, z_off))
+        if size_changed:
+            self._view.rebuild_grid_geometry()
+        gi = snap["ground_image"]
+        if gi != self._ground_image:
+            if gi:
+                self._view.set_ground_image(gi[0], gi[1])
+                self._ground_image = gi
+                self._ground_image_aspect = gi[1][2] / max(gi[1][3], 1e-6)
+                self._show_img_toolbar(gi[1])
+            else:
+                self._view.clear_ground_image()
+                self._ground_image = None
+                self._img_toolbar.hide()
+        self._view.refresh()
+        self._mark_dirty()
+        self._update_status()
+
+    def _update_undo_actions(self) -> None:
+        self._act_undo.setEnabled(bool(self._undo_stack))
+        self._act_redo.setEnabled(bool(self._redo_stack))
+
+    def _on_undo(self) -> None:
+        if not self._undo_stack:
+            return
+        # Save current state for redo
+        current = {
+            "tiles": [
+                (pt.definition, pt.grid_x, pt.grid_y, pt.rotation, pt.z_offset)
+                for pt in self._model.all_placed()
+            ],
+            "ground_image": self._ground_image,
+            "grid_cols": self._model.GRID_COLS,
+            "grid_rows": self._model.GRID_ROWS,
+        }
+        self._redo_stack.append(current)
+        self._restore(self._undo_stack.pop())
+        self._update_undo_actions()
+
+    def _on_redo(self) -> None:
+        if not self._redo_stack:
+            return
+        current = {
+            "tiles": [
+                (pt.definition, pt.grid_x, pt.grid_y, pt.rotation, pt.z_offset)
+                for pt in self._model.all_placed()
+            ],
+            "ground_image": self._ground_image,
+            "grid_cols": self._model.GRID_COLS,
+            "grid_rows": self._model.GRID_ROWS,
+        }
+        self._undo_stack.append(current)
+        self._restore(self._redo_stack.pop())
+        self._update_undo_actions()
+
     def _update_title(self) -> None:
         name = os.path.basename(self._project_path) if self._project_path else "Untitled"
         dirty = " *" if self._is_dirty else ""
@@ -302,6 +405,9 @@ class MainWindow(QMainWindow):
         self._is_dirty = False
         self._ground_image = None
         self._img_toolbar.hide()
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._update_undo_actions()
         # Rebuild palette (clear all tabs) and GL cache
         self._palette.clear_all_tabs()
         self._view.load_definitions([])
@@ -398,6 +504,7 @@ class MainWindow(QMainWindow):
     def _on_tile_placed(self, gx: float, gy: float) -> None:
         if self._selected_definition is None:
             return
+        self._snapshot()
         from PyQt5.QtWidgets import QApplication
         free = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
         igx, igy = int(math.floor(gx)), int(math.floor(gy))
@@ -417,6 +524,7 @@ class MainWindow(QMainWindow):
         self._update_status()
 
     def _on_tile_removed(self, gx: int, gy: int) -> None:
+        self._snapshot()
         self._model.remove_at(gx, gy)
         self._view.refresh()
         self._mark_dirty()
@@ -496,6 +604,7 @@ class MainWindow(QMainWindow):
         if cols == self._model.GRID_COLS and rows == self._model.GRID_ROWS:
             return
 
+        self._snapshot()
         removed = self._model.resize(cols, rows)
         self._view.rebuild_grid_geometry()
         self._mark_dirty()
@@ -570,6 +679,7 @@ class MainWindow(QMainWindow):
         if dlg.exec_() != QDialog.Accepted:
             return
 
+        self._snapshot()
         rect = [x_spin.value(), y_spin.value(), w_spin.value(), h_spin.value()]
         self._view.set_ground_image(path, rect)
         self._ground_image = (path, rect)
@@ -580,6 +690,7 @@ class MainWindow(QMainWindow):
     def _on_clear_ground_image(self) -> None:
         if self._ground_image is None:
             return
+        self._snapshot()
         self._view.clear_ground_image()
         self._ground_image = None
         self._img_toolbar.hide()

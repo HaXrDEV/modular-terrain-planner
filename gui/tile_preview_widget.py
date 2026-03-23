@@ -60,6 +60,7 @@ class TilePreviewWidget(QOpenGLWidget):
 
         self._ready          = False
         self._pending_upload = False
+        self._bg             = (0.13, 0.13, 0.15)
 
         self.setFixedHeight(200)
         self.setMouseTracking(True)
@@ -67,6 +68,14 @@ class TilePreviewWidget(QOpenGLWidget):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def set_background_color(self, r: float, g: float, b: float) -> None:
+        self._bg = (r, g, b)
+        if self._ready:
+            self.makeCurrent()
+            glClearColor(r, g, b, 1.0)
+            self.doneCurrent()
+            self.update()
 
     def set_tile(self, defn: Optional[TileDefinition], rotation: int = 0) -> None:
         self._defn     = defn
@@ -96,7 +105,7 @@ class TilePreviewWidget(QOpenGLWidget):
             self._u_rotz  = glGetUniformLocation(p, b"uRotZ")
 
             glEnable(GL_DEPTH_TEST)
-            glClearColor(0.13, 0.13, 0.15, 1.0)
+            glClearColor(*self._bg, 1.0)
 
             self._ready = True
 

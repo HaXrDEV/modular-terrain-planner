@@ -118,6 +118,9 @@ class PalettePanel(QWidget):
         """Return the number of open folder tabs."""
         return self._tabs.count()
 
+    def set_preview_background(self, r: float, g: float, b: float) -> None:
+        self._preview.set_background_color(r, g, b)
+
     def selected_definition(self) -> Optional[TileDefinition]:
         return self._selected
 

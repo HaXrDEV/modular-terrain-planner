@@ -158,6 +158,7 @@ class GLGridView(QOpenGLWidget):
         self._ground_vao = self._ground_vbo = self._ground_n = 0
         self._grid_vao   = self._grid_vbo   = self._grid_n   = 0
         self._ready      = False  # True after initializeGL succeeds
+        self._bg         = (0.10, 0.10, 0.12)  # void background colour
 
         # Ground image texture
         self._tex_id:   int  = 0
@@ -188,6 +189,15 @@ class GLGridView(QOpenGLWidget):
 
     def set_pan_speed(self, speed: float) -> None:
         self._pan_speed = speed
+
+    def set_background_color(self, r: float, g: float, b: float) -> None:
+        """Set the GL clear colour (void background). Call after GL is ready."""
+        self._bg = (r, g, b)
+        if self._ready:
+            self.makeCurrent()
+            glClearColor(r, g, b, 1.0)
+            self.doneCurrent()
+            self.update()
 
     def set_pending_tile(self, definition: Optional[TileDefinition], rotation: int) -> None:
         self._pending_def = definition
@@ -332,7 +342,7 @@ class GLGridView(QOpenGLWidget):
             self._u_tex_sampler = glGetUniformLocation(p, b"uTex")
 
             glEnable(GL_DEPTH_TEST)
-            glClearColor(0.10, 0.10, 0.12, 1.0)
+            glClearColor(*self._bg, 1.0)
 
             self._build_static_geometry()
             self._ready = True

@@ -790,6 +790,13 @@ class MainWindow(QMainWindow):
         self._act_dark_mode.setChecked(theme == "dark")
         self._settings.theme = theme
         self._settings.save()
+        # Match GL backgrounds to theme
+        if theme == "dark":
+            r, g, b = 0x1F / 255, 0x1F / 255, 0x1F / 255
+        else:
+            r, g, b = 0xF3 / 255, 0xF3 / 255, 0xF3 / 255
+        self._view.set_background_color(r, g, b)
+        self._palette.set_preview_background(r, g, b)
 
     def _on_toggle_theme(self, checked: bool) -> None:
         self._apply_theme("dark" if checked else "light")

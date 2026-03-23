@@ -106,6 +106,7 @@ class GLGridView(QOpenGLWidget):
     tile_place_requested       = pyqtSignal(float, float)
     tile_remove_requested      = pyqtSignal(int, int)
     rotate_requested           = pyqtSignal()
+    deselect_requested         = pyqtSignal()
     hover_cell_changed         = pyqtSignal(int, int)
     ground_image_rect_changed  = pyqtSignal(list)
 
@@ -697,7 +698,9 @@ class GLGridView(QOpenGLWidget):
 
     def keyPressEvent(self, event) -> None:
         key = event.key()
-        if key == Qt.Key_R:
+        if key == Qt.Key_Escape:
+            self.deselect_requested.emit()
+        elif key == Qt.Key_R:
             self.rotate_requested.emit()
         elif key == Qt.Key_Delete:
             gx, gy = self._hover_cell

@@ -96,6 +96,17 @@ class PalettePanel(QWidget):
         self._info_label.setText("No tile selected")
         self.tile_selected.emit(None)
 
+    def deselect(self) -> None:
+        """Clear the current tile selection without emitting tile_selected."""
+        self._selected = None
+        self._preview.set_tile(None)
+        self._info_label.setText("No tile selected")
+        page = self._tabs.currentWidget()
+        if page is not None:
+            lst = page.findChild(QListWidget)
+            if lst is not None:
+                lst.setCurrentRow(-1)
+
     def folder_for_tab(self, index: int) -> Optional[str]:
         """Return the folder path stored in the tab at *index*, or None."""
         return self._tabs.tabBar().tabData(index)

@@ -93,6 +93,7 @@ class MainWindow(QMainWindow):
         self._view.tile_place_requested.connect(self._on_tile_placed)
         self._view.tile_remove_requested.connect(self._on_tile_removed)
         self._view.rotate_requested.connect(self._on_rotate)
+        self._view.deselect_requested.connect(self._on_deselect)
         self._view.ground_image_rect_changed.connect(self._on_ground_image_moved)
 
         self._img_scale_slider.valueChanged.connect(self._on_img_scale_changed)
@@ -505,6 +506,13 @@ class MainWindow(QMainWindow):
         self._pending_rotation = 0
         self._view.set_pending_tile(defn, 0)
         self._view.setFocus()
+        self._update_status()
+
+    def _on_deselect(self) -> None:
+        self._selected_definition = None
+        self._pending_rotation = 0
+        self._palette.deselect()
+        self._view.set_pending_tile(None, 0)
         self._update_status()
 
     def _on_tile_placed(self, gx: float, gy: float) -> None:

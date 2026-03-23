@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox, QToolBar, QSlider, QLabel,
 )
 
+from gui.style import WIN11_STYLESHEET, DARK_STYLESHEET
 from models.grid_model import GridModel
 from models.placed_tile import PlacedTile
 from models.tile_definition import TileDefinition
@@ -100,6 +101,7 @@ class MainWindow(QMainWindow):
         self._img_scale_slider.valueChanged.connect(self._on_img_scale_changed)
 
         self._view.set_pan_speed(self._settings.pan_speed)
+        self._apply_theme(self._settings.theme)
 
         self._update_title()
         self._update_status()
@@ -195,6 +197,14 @@ class MainWindow(QMainWindow):
         act_clear_img = QAction("&Clear Ground Image", self)
         act_clear_img.triggered.connect(self._on_clear_ground_image)
         edit_menu.addAction(act_clear_img)
+
+        # View menu
+        view_menu = mb.addMenu("&View")
+
+        self._act_dark_mode = QAction("&Dark Mode", self)
+        self._act_dark_mode.setCheckable(True)
+        self._act_dark_mode.triggered.connect(self._on_toggle_theme)
+        view_menu.addAction(self._act_dark_mode)
 
     # ------------------------------------------------------------------
     # Session restore
@@ -772,6 +782,17 @@ class MainWindow(QMainWindow):
         self._img_scale_slider.blockSignals(False)
         self._img_scale_label.setText(f"  {rect[2]:.0f} cells  ")
         self._img_toolbar.show()
+
+    def _apply_theme(self, theme: str) -> None:
+        from PyQt5.QtWidgets import QApplication
+        ss = DARK_STYLESHEET if theme == "dark" else WIN11_STYLESHEET
+        QApplication.instance().setStyleSheet(ss)
+        self._act_dark_mode.setChecked(theme == "dark")
+        self._settings.theme = theme
+        self._settings.save()
+
+    def _on_toggle_theme(self, checked: bool) -> None:
+        self._apply_theme("dark" if checked else "light")
 
     def _update_status(self) -> None:
         name = self._selected_definition.name if self._selected_definition else "None"

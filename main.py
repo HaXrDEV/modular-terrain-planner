@@ -30,6 +30,8 @@ def main() -> None:
     font = QFont("Segoe UI", 9)
     app.setFont(font)
 
+    # Theme is applied inside MainWindow.__init__ from persisted settings.
+    # Set light as default so widgets render correctly before the window opens.
     app.setStyleSheet(WIN11_STYLESHEET)
 
     window = MainWindow()

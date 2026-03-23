@@ -19,6 +19,7 @@ class AppSettings:
     def __init__(self) -> None:
         self.recent_folders: List[str] = []
         self.pan_speed: float = self._DEFAULT_PAN_SPEED
+        self.theme: str = "light"  # "light" | "dark"
 
     # ------------------------------------------------------------------
     # Load / save
@@ -31,6 +32,7 @@ class AppSettings:
                 data = json.loads(self._FILE.read_text(encoding="utf-8"))
                 self.recent_folders = [str(f) for f in data.get("recent_folders", [])]
                 self.pan_speed = float(data.get("pan_speed", self._DEFAULT_PAN_SPEED))
+                self.theme = str(data.get("theme", "light"))
         except Exception:
             pass
 
@@ -38,7 +40,8 @@ class AppSettings:
         """Persist current settings to disk; silently ignores write errors."""
         try:
             self._DIR.mkdir(parents=True, exist_ok=True)
-            data = {"recent_folders": self.recent_folders, "pan_speed": self.pan_speed}
+            data = {"recent_folders": self.recent_folders, "pan_speed": self.pan_speed,
+                    "theme": self.theme}
             self._FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except Exception:
             pass

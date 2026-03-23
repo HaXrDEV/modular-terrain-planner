@@ -5,6 +5,7 @@ Stored as JSON in ~/.modular-terrain-planner/settings.json so the last
 session's folders are automatically restored on next launch.
 """
 import json
+import sys
 from pathlib import Path
 from typing import List
 
@@ -19,7 +20,24 @@ class AppSettings:
     def __init__(self) -> None:
         self.recent_folders: List[str] = []
         self.pan_speed: float = self._DEFAULT_PAN_SPEED
-        self.theme: str = "light"  # "light" | "dark"
+        self.theme: str = "auto"  # "auto" | "light" | "dark"
+
+    @staticmethod
+    def _system_theme() -> str:
+        """Return 'dark' if Windows is set to dark mode, else 'light'."""
+        if sys.platform == "win32":
+            try:
+                import winreg
+                key = winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                )
+                val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                winreg.CloseKey(key)
+                return "light" if val else "dark"
+            except Exception:
+                pass
+        return "light"
 
     # ------------------------------------------------------------------
     # Load / save
@@ -32,7 +50,8 @@ class AppSettings:
                 data = json.loads(self._FILE.read_text(encoding="utf-8"))
                 self.recent_folders = [str(f) for f in data.get("recent_folders", [])]
                 self.pan_speed = float(data.get("pan_speed", self._DEFAULT_PAN_SPEED))
-                self.theme = str(data.get("theme", "light"))
+                if "theme" in data:
+                    self.theme = str(data["theme"])
         except Exception:
             pass
 

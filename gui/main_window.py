@@ -6,7 +6,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QImageReader
 from PyQt5.QtWidgets import (
     QMainWindow, QSplitter, QFileDialog, QMessageBox, QStatusBar,
-    QAction, QMenuBar, QDialog, QDialogButtonBox, QFormLayout, QSpinBox,
+    QAction, QActionGroup, QMenuBar, QDialog, QDialogButtonBox, QFormLayout, QSpinBox,
     QDoubleSpinBox, QToolBar, QSlider, QLabel,
 )
 
@@ -200,11 +200,22 @@ class MainWindow(QMainWindow):
 
         # View menu
         view_menu = mb.addMenu("&View")
+        theme_menu = view_menu.addMenu("&Theme")
 
-        self._act_dark_mode = QAction("&Dark Mode", self)
-        self._act_dark_mode.setCheckable(True)
-        self._act_dark_mode.triggered.connect(self._on_toggle_theme)
-        view_menu.addAction(self._act_dark_mode)
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+
+        self._act_theme_auto  = QAction("&Automatic", self)
+        self._act_theme_light = QAction("&Light",     self)
+        self._act_theme_dark  = QAction("&Dark",      self)
+        for act in (self._act_theme_auto, self._act_theme_light, self._act_theme_dark):
+            act.setCheckable(True)
+            theme_group.addAction(act)
+            theme_menu.addAction(act)
+
+        self._act_theme_auto.triggered.connect(lambda: self._apply_theme("auto"))
+        self._act_theme_light.triggered.connect(lambda: self._apply_theme("light"))
+        self._act_theme_dark.triggered.connect(lambda: self._apply_theme("dark"))
 
     # ------------------------------------------------------------------
     # Session restore
@@ -785,21 +796,23 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self, theme: str) -> None:
         from PyQt5.QtWidgets import QApplication
-        ss = DARK_STYLESHEET if theme == "dark" else WIN11_STYLESHEET
-        QApplication.instance().setStyleSheet(ss)
-        self._act_dark_mode.setChecked(theme == "dark")
         self._settings.theme = theme
         self._settings.save()
-        # Match GL backgrounds to theme
-        if theme == "dark":
+        # Resolve "auto" to the actual system preference
+        resolved = self._settings._system_theme() if theme == "auto" else theme
+        ss = DARK_STYLESHEET if resolved == "dark" else WIN11_STYLESHEET
+        QApplication.instance().setStyleSheet(ss)
+        # Tick the correct radio action
+        self._act_theme_auto.setChecked(theme == "auto")
+        self._act_theme_light.setChecked(theme == "light")
+        self._act_theme_dark.setChecked(theme == "dark")
+        # Match GL backgrounds
+        if resolved == "dark":
             r, g, b = 0x1F / 255, 0x1F / 255, 0x1F / 255
         else:
             r, g, b = 0xF3 / 255, 0xF3 / 255, 0xF3 / 255
         self._view.set_background_color(r, g, b)
         self._palette.set_preview_background(r, g, b)
-
-    def _on_toggle_theme(self, checked: bool) -> None:
-        self._apply_theme("dark" if checked else "light")
 
     def _update_status(self) -> None:
         name = self._selected_definition.name if self._selected_definition else "None"

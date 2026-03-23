@@ -635,20 +635,21 @@ class MainWindow(QMainWindow):
 
     def _on_paste_place(self, cx: float, cy: float) -> None:
         """Called when the user left-clicks during paste ghost mode."""
-        if not self._clipboard:
+        paste_buf = self._view._paste_buffer
+        if not paste_buf:
             self._view.set_paste_buffer(None)
             return
         self._snapshot()
         new_tiles = []
-        for defn, rel_x, rel_y, rotation, rel_z in self._clipboard:
+        for defn, rel_x, rel_y, rotation, rel_z in paste_buf:
             new_gx = cx + rel_x
             new_gy = cy + rel_y
             new_tile = PlacedTile(defn, new_gx, new_gy, rotation, rel_z)
             self._model.force_place(new_tile)
             new_tiles.append(new_tile)
         self._view._selection = set(new_tiles)
-        # Keep paste mode active so the user can place multiple copies
-        self._view.set_paste_buffer(list(self._clipboard))
+        # Keep paste mode active, preserving any rotation applied since Ctrl+V
+        self._view.set_paste_buffer(list(paste_buf))
         self._view.refresh()
         self._mark_dirty()
         self._update_status()

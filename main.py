@@ -5,9 +5,10 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QSurfaceFormat
+from PyQt5.QtGui import QFont, QSurfaceFormat
 from PyQt5.QtWidgets import QApplication
 from gui.main_window import MainWindow
+from gui.style import WIN11_STYLESHEET
 
 
 def main() -> None:
@@ -23,7 +24,14 @@ def main() -> None:
     QSurfaceFormat.setDefaultFormat(fmt)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("D&D STL Dungeon Designer")
+    app.setApplicationName("Modular Terrain Planner")
+
+    # Windows 11 system font
+    font = QFont("Segoe UI", 9)
+    app.setFont(font)
+
+    app.setStyleSheet(WIN11_STYLESHEET)
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())

@@ -20,7 +20,7 @@ class PalettePanel(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setFixedWidth(240)
+        self.setFixedWidth(260)
         self._selected: Optional[TileDefinition] = None
 
         layout = QVBoxLayout(self)
@@ -44,7 +44,10 @@ class PalettePanel(QWidget):
 
         self._info_label = QLabel("No tile selected")
         self._info_label.setWordWrap(True)
-        self._info_label.setFixedHeight(52)
+        self._info_label.setFixedHeight(56)
+        self._info_label.setStyleSheet(
+            "color: #5a5a5a; font-size: 8pt; padding: 2px 4px;"
+        )
         layout.addWidget(self._info_label)
 
         self._export_btn = QPushButton("Export CSV")

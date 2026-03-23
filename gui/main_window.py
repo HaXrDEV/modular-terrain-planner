@@ -27,6 +27,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Modular Terrain Planner")
+        self.setMinimumSize(900, 600)
         self.resize(1200, 800)
 
         # Persistent settings

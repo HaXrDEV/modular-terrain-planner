@@ -672,7 +672,9 @@ class GLGridView(QOpenGLWidget):
                 dy = world[1] - self._img_drag_start_world[1]
                 self._img_rect[0] = self._img_drag_start_rect[0] + dx
                 self._img_rect[1] = self._img_drag_start_rect[1] + dy
+                self.makeCurrent()
                 self._rebuild_image_quad()
+                self.doneCurrent()
                 self.ground_image_rect_changed.emit(list(self._img_rect))
                 self.update()
         else:

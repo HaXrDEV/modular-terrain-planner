@@ -47,6 +47,13 @@ class GridModel:
                 best = max(best, pt.z_offset + pt.definition.grid_z)
         return best
 
+    def topmost_at(self, gx: int, gy: int) -> Optional["PlacedTile"]:
+        """Return the topmost PlacedTile (highest z_offset) covering (gx, gy), or None."""
+        candidates = [pt for pt in self._placed if (gx, gy) in pt.occupies()]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda pt: pt.z_offset)
+
     def remove_at(self, gx: int, gy: int) -> bool:
         """Remove the topmost tile (highest z_offset) covering (gx, gy). Returns True if removed."""
         candidates = [(i, pt) for i, pt in enumerate(self._placed)

@@ -118,6 +118,25 @@ class PalettePanel(QWidget):
         """Return the number of open folder tabs."""
         return self._tabs.count()
 
+    def select_definition(self, defn: TileDefinition) -> None:
+        """Highlight *defn* in whichever tab contains it, without emitting tile_selected."""
+        for i in range(self._tabs.count()):
+            page = self._tabs.widget(i)
+            if page is None:
+                continue
+            lst = page.findChild(QListWidget)
+            if lst is None:
+                continue
+            for row in range(lst.count()):
+                if lst.item(row).data(Qt.UserRole) is defn:
+                    self._tabs.setCurrentIndex(i)
+                    lst.blockSignals(True)
+                    lst.setCurrentRow(row)
+                    lst.blockSignals(False)
+                    self._selected = defn
+                    self._preview.set_tile(defn, 0)
+                    return
+
     def set_preview_background(self, r: float, g: float, b: float) -> None:
         self._preview.set_background_color(r, g, b)
 

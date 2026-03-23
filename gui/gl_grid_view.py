@@ -105,6 +105,7 @@ void main() { FragColor = texture(uTex, vUV); }
 class GLGridView(QOpenGLWidget):
     tile_place_requested       = pyqtSignal(float, float)
     tile_remove_requested      = pyqtSignal(int, int)
+    tile_pickup_requested      = pyqtSignal(object)   # emits PlacedTile
     rotate_requested           = pyqtSignal()
     deselect_requested         = pyqtSignal()
     hover_cell_changed         = pyqtSignal(int, int)
@@ -634,6 +635,8 @@ class GLGridView(QOpenGLWidget):
                 fx, fy = self._hover_pos
                 if fx >= -self._pending_def.grid_w if self._pending_def else fx >= 0:
                     self.tile_place_requested.emit(fx, fy)
+        elif event.button() == Qt.MiddleButton:
+            self._mid_press = event.pos()
         elif event.button() == Qt.RightButton:
             # Right-click with no movement = remove tile
             self._drag_start = event.pos()
@@ -698,6 +701,16 @@ class GLGridView(QOpenGLWidget):
             self._img_dragging = False
             self._img_drag_start_world = None
             self._img_drag_start_rect = None
+        # Short middle-click (no pan) = pick up tile
+        if event.button() == Qt.MiddleButton and hasattr(self, '_mid_press'):
+            d = event.pos() - self._mid_press
+            if abs(d.x()) < 5 and abs(d.y()) < 5:
+                gx, gy = self._ray_to_grid(event.x(), event.y())
+                if gx >= 0:
+                    tile = self._model.topmost_at(gx, gy)
+                    if tile is not None:
+                        self.tile_pickup_requested.emit(tile)
+            del self._mid_press
         # Short right-click (no drag) = remove tile
         if event.button() == Qt.RightButton and hasattr(self, '_drag_start'):
             d = event.pos() - self._drag_start

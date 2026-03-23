@@ -94,6 +94,7 @@ class MainWindow(QMainWindow):
 
         self._view.tile_place_requested.connect(self._on_tile_placed)
         self._view.tile_remove_requested.connect(self._on_tile_removed)
+        self._view.tile_pickup_requested.connect(self._on_tile_pickup)
         self._view.rotate_requested.connect(self._on_rotate)
         self._view.deselect_requested.connect(self._on_deselect)
         self._view.ground_image_rect_changed.connect(self._on_ground_image_moved)
@@ -535,6 +536,17 @@ class MainWindow(QMainWindow):
         self._pending_rotation = 0
         self._palette.deselect()
         self._view.set_pending_tile(None, 0)
+        self._update_status()
+
+    def _on_tile_pickup(self, tile) -> None:
+        """Middle-click: select the picked-up tile's definition and rotation."""
+        self._pending_rotation = tile.rotation
+        # select_definition may trigger _on_tile_selected(None) via tab-change
+        # signal, clearing _selected_definition — so assign it afterwards.
+        self._palette.select_definition(tile.definition)
+        self._selected_definition = tile.definition
+        self._view.set_pending_tile(tile.definition, tile.rotation)
+        self._view.setFocus()
         self._update_status()
 
     def _on_tile_placed(self, gx: float, gy: float) -> None:

@@ -833,25 +833,79 @@ class GLGridView(QOpenGLWidget):
         return len(self._LOD_DISTS)
 
     def _rebuild_instance_buffers(self) -> None:
-        """Group placed tiles by (mesh, lod) and upload per-instance data to the GPU."""
+        """Group placed tiles by (mesh, lod) and upload per-instance data to the GPU.
+
+        Frustum culling is done with a single batched numpy operation across all
+        placed tiles — one Python loop collects AABB data, then all six plane tests
+        run in one vectorised pass, producing a boolean visibility mask.  Only
+        visible tiles enter the instance groups.
+        """
+        proj, view = self._get_proj_view()
+        pv = proj * view
+
         eye = self._eye_pos()
         ex, ey, ez = eye.x(), eye.y(), eye.z()
 
+        # Gribb-Hartmann frustum plane extraction from the PV matrix.
+        # Qt data() is column-major → reshape(4,4) yields pv_np = M^T.
+        # Rows of M == columns of pv_np.
+        pv_np = np.array(pv.data(), dtype=np.float64).reshape(4, 4)
+        c0, c1, c2, c3 = pv_np[:, 0], pv_np[:, 1], pv_np[:, 2], pv_np[:, 3]
+        planes    = np.array([c3+c0, c3-c0, c3+c1, c3-c1, c3+c2, c3-c2])  # (6,4)
+        plane_abc = planes[:, :3]   # (6, 3)
+        plane_d   = planes[:,  3]   # (6,)
+
+        all_placed = list(self._model.all_placed())
+        n = len(all_placed)
+
+        self._inst_counts = {}
+        if n == 0:
+            return
+
+        # --- Single Python loop: collect per-tile scalars into flat arrays ---
+        t_gx  = np.empty(n, np.float64)
+        t_gy  = np.empty(n, np.float64)
+        t_gzo = np.empty(n, np.float64)
+        t_ew  = np.empty(n, np.float64)
+        t_eh  = np.empty(n, np.float64)
+        t_gz  = np.empty(n, np.float64)
+        for i, pt in enumerate(all_placed):
+            t_gx[i]  = pt.grid_x
+            t_gy[i]  = pt.grid_y
+            t_gzo[i] = pt.z_offset
+            t_ew[i]  = pt.effective_w
+            t_eh[i]  = pt.effective_h
+            t_gz[i]  = pt.definition.grid_z
+
+        # --- Vectorised frustum cull ---
+        # AABB: min=(gx, gy, gz_off), max=(gx+ew, gy+eh, gz_off+gz)
+        aabb_min = np.stack([t_gx,          t_gy,          t_gzo         ], axis=1)  # (N,3)
+        aabb_max = np.stack([t_gx + t_ew,   t_gy + t_eh,   t_gzo + t_gz  ], axis=1)  # (N,3)
+
+        # For each plane choose the p-vertex (corner maximising signed distance).
+        # plane_abc[:,None,:] is (6,1,3), aabb_* are (1,N,3) via broadcasting.
+        p_verts = np.where(
+            plane_abc[:, np.newaxis, :] >= 0,
+            aabb_max[np.newaxis, :, :],
+            aabb_min[np.newaxis, :, :],
+        )  # (6, N, 3)
+        signed_dists = (p_verts * plane_abc[:, np.newaxis, :]).sum(axis=2) \
+                       + plane_d[:, np.newaxis]           # (6, N)
+        visible_mask = np.all(signed_dists >= 0.0, axis=0)   # (N,)  True = inside frustum
+
+        # --- Vectorised LOD distance ---
+        cx   = t_gx + t_ew * 0.5
+        cy   = t_gy + t_eh * 0.5
+        cz   = t_gzo + t_gz * 0.5
+        dist = np.sqrt((cx - ex)**2 + (cy - ey)**2 + (cz - ez)**2)  # (N,)
+
+        # --- Group visible tiles by (path, lod) ---
         groups: Dict[Tuple[str, int], list] = {}
-        for pt in self._model.all_placed():
+        for i in np.where(visible_mask)[0]:
+            pt   = all_placed[i]
             path = pt.definition.stl_path
-            ew = float(pt.effective_w)
-            eh = float(pt.effective_h)
-            gz = float(pt.definition.grid_z)
+            lod  = self._lod_for_dist(float(dist[i]))
 
-            # Eye-to-tile-centre distance for LOD selection
-            cx = pt.grid_x + ew * 0.5
-            cy = pt.grid_y + eh * 0.5
-            cz = pt.z_offset + gz * 0.5
-            dist = math.sqrt((cx - ex)**2 + (cy - ey)**2 + (cz - ez)**2)
-            lod = self._lod_for_dist(dist)
-
-            # Fall back to highest available LOD if this level wasn't generated
             key = (path, lod)
             while lod > 0 and key not in self._inst_cache:
                 lod -= 1
@@ -863,9 +917,9 @@ class GLGridView(QOpenGLWidget):
                 groups[key] = []
             col = pt.definition.color
             groups[key].append((
-                pt.grid_x, pt.grid_y, pt.z_offset,
+                float(t_gx[i]), float(t_gy[i]), float(t_gzo[i]),
                 math.radians(pt.rotation),
-                ew, eh, gz,
+                float(t_ew[i]), float(t_eh[i]), float(t_gz[i]),
                 col.redF(), col.greenF(), col.blueF(), 1.0,
             ))
 

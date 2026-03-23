@@ -99,6 +99,61 @@ void main() { FragColor = texture(uTex, vUV); }
 
 
 # ---------------------------------------------------------------------------
+# Ray–mesh picking helpers (module-level, CPU/numpy)
+# ---------------------------------------------------------------------------
+
+def _ray_aabb(origin: np.ndarray, direction: np.ndarray,
+              lo: np.ndarray, hi: np.ndarray) -> bool:
+    """Slab method AABB test. Returns True if the ray hits [lo, hi]."""
+    t_min, t_max = -np.inf, np.inf
+    for i in range(3):
+        d = direction[i]
+        if abs(d) < 1e-10:
+            if origin[i] < lo[i] or origin[i] > hi[i]:
+                return False
+        else:
+            t1 = (lo[i] - origin[i]) / d
+            t2 = (hi[i] - origin[i]) / d
+            if t1 > t2:
+                t1, t2 = t2, t1
+            t_min = max(t_min, t1)
+            t_max = min(t_max, t2)
+    return t_max >= max(t_min, 0.0)
+
+
+def _ray_triangles_min_t(origin: np.ndarray, direction: np.ndarray,
+                         triangles: np.ndarray) -> Optional[float]:
+    """Vectorised Möller–Trumbore over (N,3,3) float32 array.
+    Returns the smallest positive t, or None if no hit."""
+    EPS = 1e-7
+    v0 = triangles[:, 0].astype(np.float64)
+    v1 = triangles[:, 1].astype(np.float64)
+    v2 = triangles[:, 2].astype(np.float64)
+
+    e1 = v1 - v0
+    e2 = v2 - v0
+
+    h = np.cross(direction, e2)                       # (N, 3)
+    a = np.einsum('ni,ni->n', e1, h)                  # (N,)
+
+    valid = np.abs(a) > EPS
+    f = np.where(valid, 1.0 / np.where(valid, a, 1.0), 0.0)
+
+    s  = origin - v0                                  # (N, 3)
+    u  = f * np.einsum('ni,ni->n', s, h)
+
+    q  = np.cross(s, e1)                              # (N, 3)
+    v  = f * np.einsum('i,ni->n', direction, q)
+
+    t  = f * np.einsum('ni,ni->n', e2, q)
+
+    hit = valid & (u >= 0.0) & (v >= 0.0) & (u + v <= 1.0) & (t > EPS)
+    if not np.any(hit):
+        return None
+    return float(np.min(t[hit]))
+
+
+# ---------------------------------------------------------------------------
 # GLGridView
 # ---------------------------------------------------------------------------
 
@@ -750,6 +805,85 @@ class GLGridView(QOpenGLWidget):
             return -1, -1
         return int(math.floor(world[0])), int(math.floor(world[1]))
 
+    def _pick_tile(self, sx: int, sy: int) -> Optional['PlacedTile']:
+        """Return the front-most PlacedTile whose mesh the screen ray hits."""
+        w, h = max(self.width(), 1), max(self.height(), 1)
+        proj, view = self._get_proj_view()
+        inv_pv, ok = (proj * view).inverted()
+        if not ok:
+            return None
+
+        ndx = (2.0 * sx / w) - 1.0
+        ndy = 1.0 - (2.0 * sy / h)
+        near4 = inv_pv * QVector4D(ndx, ndy, -1.0, 1.0)
+        far4  = inv_pv * QVector4D(ndx, ndy,  1.0, 1.0)
+        near = np.array([near4.x()/near4.w(), near4.y()/near4.w(), near4.z()/near4.w()])
+        far  = np.array([far4.x()/far4.w(),   far4.y()/far4.w(),   far4.z()/far4.w()])
+        ray_dir = far - near
+        ray_len = np.linalg.norm(ray_dir)
+        if ray_len < 1e-10:
+            return None
+        ray_dir /= ray_len
+
+        best_t    = np.inf
+        best_tile = None
+        _zero = np.zeros(3)
+        _one  = np.ones(3)
+
+        for pt in self._model.all_placed():
+            defn = pt.definition
+            if defn.view_triangles is None or len(defn.view_triangles) == 0:
+                continue
+
+            ew = float(pt.effective_w)
+            eh = float(pt.effective_h)
+            gz = float(defn.grid_z)
+
+            # Reconstruct the same model matrix used in _draw_tile
+            model_mat = QMatrix4x4()
+            model_mat.translate(float(pt.grid_x), float(pt.grid_y), pt.z_offset)
+            model_mat.scale(ew, eh, gz)
+            if pt.rotation != 0:
+                model_mat.translate(0.5, 0.5, 0.0)
+                model_mat.rotate(float(pt.rotation), 0.0, 0.0, 1.0)
+                model_mat.translate(-0.5, -0.5, 0.0)
+
+            inv_model, ok = model_mat.inverted()
+            if not ok:
+                continue
+
+            # Transform ray endpoints to local [0,1]³ space
+            def _xform(v):
+                q = inv_model * QVector4D(v[0], v[1], v[2], 1.0)
+                return np.array([q.x()/q.w(), q.y()/q.w(), q.z()/q.w()])
+
+            lo = _xform(near)
+            ld = _xform(far) - lo
+            ld_len = np.linalg.norm(ld)
+            if ld_len < 1e-10:
+                continue
+            ld /= ld_len
+
+            # Fast AABB reject before triangle test
+            if not _ray_aabb(lo, ld, _zero, _one):
+                continue
+
+            t_local = _ray_triangles_min_t(lo, ld, defn.view_triangles)
+            if t_local is None:
+                continue
+
+            # Convert local hit to world distance for depth sorting
+            hit_local = lo + ld * t_local
+            q = model_mat * QVector4D(hit_local[0], hit_local[1], hit_local[2], 1.0)
+            hit_world = np.array([q.x()/q.w(), q.y()/q.w(), q.z()/q.w()])
+            world_t = float(np.dot(hit_world - near, ray_dir))
+
+            if world_t < best_t:
+                best_t    = world_t
+                best_tile = pt
+
+        return best_tile
+
     def _compute_hover_cell(self, mx: int, my: int) -> Tuple[int, int]:
         """Return the snapped grid origin for the pending tile centered on the cursor."""
         world = self._ray_to_world(mx, my, 0.0)
@@ -801,9 +935,8 @@ class GLGridView(QOpenGLWidget):
                     self._img_drag_start_world = world
                     self._img_drag_start_rect = list(self._img_rect)
             elif self._pending_def is None:
-                # Selection mode
-                gx, gy = self._ray_to_grid(event.x(), event.y())
-                tile = self._model.topmost_at(gx, gy) if gx >= 0 else None
+                # Selection mode — test against actual mesh geometry
+                tile = self._pick_tile(event.x(), event.y())
                 shift = bool(event.modifiers() & Qt.ShiftModifier)
                 if tile is not None:
                     if shift:
@@ -972,11 +1105,9 @@ class GLGridView(QOpenGLWidget):
         if event.button() == Qt.MiddleButton and hasattr(self, '_mid_press'):
             d = event.pos() - self._mid_press
             if abs(d.x()) < 5 and abs(d.y()) < 5:
-                gx, gy = self._ray_to_grid(event.x(), event.y())
-                if gx >= 0:
-                    tile = self._model.topmost_at(gx, gy)
-                    if tile is not None:
-                        self.tile_pickup_requested.emit(tile)
+                tile = self._pick_tile(event.x(), event.y())
+                if tile is not None:
+                    self.tile_pickup_requested.emit(tile)
             del self._mid_press
         # Short right-click (no drag) = remove tile
         if event.button() == Qt.RightButton and hasattr(self, '_drag_start'):

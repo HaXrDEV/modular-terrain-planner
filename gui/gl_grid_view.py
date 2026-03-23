@@ -983,14 +983,16 @@ class GLGridView(QOpenGLWidget):
 
     def _tile_verts_in_box(self, pt: 'PlacedTile', pv_np: np.ndarray,
                            rx: tuple, ry: tuple, sw: int, sh: int) -> bool:
-        """Return True if any projected mesh vertex of pt falls inside the screen box rx×ry."""
-        defn = pt.definition
-        if defn.view_triangles is None or len(defn.view_triangles) == 0:
-            return False
+        """Return True if the tile's screen-space bounding box overlaps the selection box rx×ry.
 
+        Projects the 8 corners of the tile's axis-aligned bounding box (O(8) per tile)
+        instead of all mesh vertices — fast enough for scenes with thousands of tiles.
+        The overlap test is conservative: tiles whose projected AABB touches the selection
+        rect are included even if the mesh itself doesn't reach that corner.
+        """
         ew = float(pt.effective_w)
         eh = float(pt.effective_h)
-        gz = float(defn.grid_z)
+        gz = float(pt.definition.grid_z)
 
         model_mat = QMatrix4x4()
         model_mat.translate(float(pt.grid_x), float(pt.grid_y), pt.z_offset)
@@ -1000,30 +1002,33 @@ class GLGridView(QOpenGLWidget):
             model_mat.rotate(float(pt.rotation), 0.0, 0.0, 1.0)
             model_mat.translate(-0.5, -0.5, 0.0)
 
-        # Qt stores matrices column-major; reshape gives M^T so clip = h @ model_np @ pv_np
         model_np = np.array(model_mat.data(), dtype=np.float32).reshape(4, 4)
-        mvp_np   = model_np @ pv_np   # (PV @ model)^T — applied as h @ mvp_np
+        mvp_np   = model_np @ pv_np
 
-        # All triangle vertices as homogeneous (N*3, 4)
-        verts = defn.view_triangles.reshape(-1, 3)          # (N*3, 3)
-        h = np.ones((len(verts), 4), dtype=np.float32)
-        h[:, :3] = verts
-        clip = h @ mvp_np                                    # (N*3, 4) clip-space
+        # 8 corners of the unit cube [0,1]³ in tile local space
+        corners = np.array([
+            [x, y, z, 1.0]
+            for x in (0.0, 1.0) for y in (0.0, 1.0) for z in (0.0, 1.0)
+        ], dtype=np.float32)                                 # (8, 4)
+        clip = corners @ mvp_np                              # (8, 4)
 
-        w_vals = clip[:, 3]
+        w_vals  = clip[:, 3]
         visible = w_vals > 1e-6
         if not np.any(visible):
             return False
 
-        ndc_x = clip[:, 0] / np.where(visible, w_vals, 1.0)
-        ndc_y = clip[:, 1] / np.where(visible, w_vals, 1.0)
-        sx_all = (ndc_x * 0.5 + 0.5) * sw
-        sy_all = (1.0 - (ndc_y * 0.5 + 0.5)) * sh
+        safe_w  = np.where(visible, w_vals, 1.0)
+        ndc_x   = clip[:, 0] / safe_w
+        ndc_y   = clip[:, 1] / safe_w
+        sx_all  = (ndc_x * 0.5 + 0.5) * sw
+        sy_all  = (1.0 - (ndc_y * 0.5 + 0.5)) * sh
 
-        hit = (visible &
-               (sx_all >= rx[0]) & (sx_all <= rx[1]) &
-               (sy_all >= ry[0]) & (sy_all <= ry[1]))
-        return bool(np.any(hit))
+        vis_sx  = sx_all[visible]
+        vis_sy  = sy_all[visible]
+
+        # Overlap: projected AABB of tile corners vs selection rect
+        return (vis_sx.max() >= rx[0] and vis_sx.min() <= rx[1] and
+                vis_sy.max() >= ry[0] and vis_sy.min() <= ry[1])
 
     def _pick_tile(self, sx: int, sy: int) -> Optional['PlacedTile']:
         """Return the front-most PlacedTile whose mesh the screen ray hits."""

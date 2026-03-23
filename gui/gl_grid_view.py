@@ -191,7 +191,7 @@ class GLGridView(QOpenGLWidget):
             return
         self.makeCurrent()
         if self._tex_id:
-            glDeleteTextures(1, [self._tex_id])
+            glDeleteTextures([self._tex_id])
             self._tex_id = 0
         img = QImage(path).convertToFormat(QImage.Format_RGBA8888).mirrored(False, True)
         if img.isNull():
@@ -200,7 +200,7 @@ class GLGridView(QOpenGLWidget):
         ptr = img.bits()
         ptr.setsize(img.byteCount())
         data = np.frombuffer(ptr, dtype=np.uint8).copy()
-        self._tex_id = glGenTextures(1)
+        self._tex_id = int(glGenTextures(1))
         glBindTexture(GL_TEXTURE_2D, self._tex_id)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width(), img.height(),
                      0, GL_RGBA, GL_UNSIGNED_BYTE, data)
@@ -218,7 +218,7 @@ class GLGridView(QOpenGLWidget):
         if not self._ready or not self._tex_id:
             return
         self.makeCurrent()
-        glDeleteTextures(1, [self._tex_id])
+        glDeleteTextures([self._tex_id])
         self._tex_id = 0
         if self._img_vao:
             glDeleteVertexArrays(1, [self._img_vao])

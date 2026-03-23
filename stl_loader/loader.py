@@ -100,6 +100,18 @@ def load_tile_mesh(
     m = stl_mesh.Mesh.from_file(stl_path)
     verts = m.vectors.astype(np.float64)  # (N, 3, 3)
 
+    # Normalise winding using stored STL face normals so back-face culling works.
+    # For each triangle: if the cross-product normal opposes the stored normal,
+    # swap v1 and v2 to flip the winding.  Triangles with a zero stored normal
+    # are left unchanged (can't determine intent).
+    stored = m.normals.astype(np.float64)               # (N, 3)
+    geo    = np.cross(verts[:, 1] - verts[:, 0],
+                      verts[:, 2] - verts[:, 0])        # (N, 3)
+    stored_len = np.linalg.norm(stored, axis=1)         # (N,)
+    dots       = (geo * stored).sum(axis=1)             # (N,)
+    flip       = (stored_len > 1e-6) & (dots < 0.0)
+    verts[flip, 1], verts[flip, 2] = verts[flip, 2].copy(), verts[flip, 1].copy()
+
     sx = dx if dx > 0 else 1.0
     sy = dy if dy > 0 else 1.0
     sz = dz if dz > 0 else 1.0

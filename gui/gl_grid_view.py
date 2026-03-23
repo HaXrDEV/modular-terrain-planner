@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import QOpenGLWidget, QMessageBox
 try:
     from OpenGL.GL import (
         GL_ARRAY_BUFFER, GL_COLOR_BUFFER_BIT, GL_COMPILE_STATUS,
+        GL_BACK, GL_CULL_FACE,
         GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST, GL_DYNAMIC_DRAW, GL_FALSE, GL_FLOAT,
         GL_FRAGMENT_SHADER, GL_LINE_LOOP, GL_LINES, GL_LINK_STATUS, GL_STATIC_DRAW,
         GL_TRIANGLES, GL_VERTEX_SHADER, GL_BLEND, GL_SRC_ALPHA,
@@ -37,7 +38,7 @@ try:
         glAttachShader, glBindBuffer, glBindVertexArray, glBlendFunc,
         glBufferData, glClear, glClearColor, glCompileShader, glCreateProgram,
         glCreateShader, glDeleteBuffers, glDeleteShader, glDeleteVertexArrays,
-        glDisable, glDrawArrays, glDrawArraysInstanced, glEnable,
+        glCullFace, glDisable, glDrawArrays, glDrawArraysInstanced, glEnable,
         glEnableVertexAttribArray,
         glGenBuffers, glGenVertexArrays, glGetProgramInfoLog, glGetProgramiv,
         glGetShaderInfoLog, glGetShaderiv, glGetUniformLocation, glLinkProgram,
@@ -447,6 +448,8 @@ class GLGridView(QOpenGLWidget):
             self._u_tex_sampler = glGetUniformLocation(p, b"uTex")
 
             glEnable(GL_DEPTH_TEST)
+            glEnable(GL_CULL_FACE)
+            glCullFace(GL_BACK)
             glClearColor(*self._bg, 1.0)
 
             self._build_static_geometry()
@@ -543,6 +546,10 @@ class GLGridView(QOpenGLWidget):
                 self._draw_flat_rect(gx, gy, w, h, z, (0.0, 0.47, 0.83, 0.35))
             glDisable(GL_BLEND)
 
+        # --- Ghost draws (move, paste, placement) — disable culling so semi-transparent
+        #     tiles are visible from all angles regardless of winding ---
+        glDisable(GL_CULL_FACE)
+
         # --- Move ghost ---
         if self._move_dragging and self._selection:
             dx, dy = self._move_delta
@@ -588,6 +595,8 @@ class GLGridView(QOpenGLWidget):
                 glUseProgram(self._mesh_prog)
                 self._draw_tile(ghost, proj, view, alpha=0.45)
                 glDisable(GL_BLEND)
+
+        glEnable(GL_CULL_FACE)
 
         # --- Rubber-band selection box (native GL, screen-space ortho) ---
         if self._box_start_screen is not None and self._box_end_screen is not None:

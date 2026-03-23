@@ -27,8 +27,11 @@ from PyQt5.QtWidgets import QOpenGLWidget, QMessageBox
 try:
     from OpenGL.GL import (
         GL_ARRAY_BUFFER, GL_COLOR_BUFFER_BIT, GL_COMPILE_STATUS,
-        GL_BACK, GL_CULL_FACE,
+        GL_BACK, GL_FRONT, GL_CULL_FACE,
         GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST, GL_DYNAMIC_DRAW, GL_FALSE, GL_FLOAT,
+        GL_STENCIL_BUFFER_BIT, GL_STENCIL_TEST,
+        GL_ALWAYS, GL_NOTEQUAL, GL_KEEP, GL_REPLACE, GL_TRUE,
+        glColorMask, glStencilFunc, glStencilOp,
         GL_FRAGMENT_SHADER, GL_LINE_LOOP, GL_LINES, GL_LINK_STATUS, GL_STATIC_DRAW,
         GL_TRIANGLES, GL_VERTEX_SHADER, GL_BLEND, GL_SRC_ALPHA,
         GL_ONE_MINUS_SRC_ALPHA,
@@ -38,7 +41,7 @@ try:
         glAttachShader, glBindBuffer, glBindVertexArray, glBlendFunc,
         glBufferData, glClear, glClearColor, glCompileShader, glCreateProgram,
         glCreateShader, glDeleteBuffers, glDeleteShader, glDeleteVertexArrays,
-        glCullFace, glDisable, glDrawArrays, glDrawArraysInstanced, glEnable,
+        glCullFace, glDepthMask, glDisable, glDrawArrays, glDrawArraysInstanced, glEnable,
         glEnableVertexAttribArray,
         glGenBuffers, glGenVertexArrays, glGetProgramInfoLog, glGetProgramiv,
         glGetShaderInfoLog, glGetShaderiv, glGetUniformLocation, glLinkProgram,
@@ -58,6 +61,7 @@ from models.tile_definition import TileDefinition
 from gui.gl_helpers import (
     MESH_VERT as _MESH_VERT, MESH_FRAG as _MESH_FRAG,
     INST_VERT as _INST_VERT, INST_FRAG as _INST_FRAG,
+    OUTLINE_VERT as _OUTLINE_VERT, OUTLINE_FRAG as _OUTLINE_FRAG,
     build_vdata as _build_vdata, upload_geometry as _upload_geometry,
     build_program as _build_program_fn, compile_shader as _compile_fn,
 )
@@ -227,10 +231,11 @@ class GLGridView(QOpenGLWidget):
         self._paste_buffer: Optional[list] = None
 
         # GPU resources (populated in initializeGL / load_definitions)
-        self._mesh_prog  = 0
-        self._flat_prog  = 0
-        self._tex_prog   = 0
-        self._inst_prog  = 0   # instanced mesh shader
+        self._mesh_prog    = 0
+        self._flat_prog    = 0
+        self._tex_prog     = 0
+        self._inst_prog    = 0   # instanced mesh shader
+        self._outline_prog = 0   # solid-colour back-face extrusion outline
         # Caches keyed by (stl_path, lod_level).  lod_level 0 = full quality.
         # _mesh_cache: ghost/preview draws (per-draw uniforms, _mesh_prog)
         # _inst_cache: instanced placed-tile draws (_inst_prog)
@@ -420,10 +425,11 @@ class GLGridView(QOpenGLWidget):
             QMessageBox.critical(self, "OpenGL error", "PyOpenGL is not installed.\nRun launch.bat to install dependencies.")
             return
         try:
-            self._mesh_prog = self._build_program(_MESH_VERT, _MESH_FRAG)
-            self._flat_prog = self._build_program(_FLAT_VERT, _FLAT_FRAG)
-            self._tex_prog  = self._build_program(_TEX_VERT,  _TEX_FRAG)
-            self._inst_prog = self._build_program(_INST_VERT, _INST_FRAG)
+            self._mesh_prog    = self._build_program(_MESH_VERT,    _MESH_FRAG)
+            self._flat_prog    = self._build_program(_FLAT_VERT,    _FLAT_FRAG)
+            self._tex_prog     = self._build_program(_TEX_VERT,     _TEX_FRAG)
+            self._inst_prog    = self._build_program(_INST_VERT,    _INST_FRAG)
+            self._outline_prog = self._build_program(_OUTLINE_VERT, _OUTLINE_FRAG)
 
             # Uniform locations — mesh (per-draw, used for ghosts)
             p = self._mesh_prog
@@ -432,6 +438,10 @@ class GLGridView(QOpenGLWidget):
             self._u_col   = glGetUniformLocation(p, b"uColor")
             self._u_alpha = glGetUniformLocation(p, b"uAlpha")
             self._u_rotz  = glGetUniformLocation(p, b"uRotZ")
+
+            # Uniform locations — outline
+            self._u_outline_mvp   = glGetUniformLocation(self._outline_prog, b"uMVP")
+            self._u_outline_color = glGetUniformLocation(self._outline_prog, b"uColor")
 
             # Uniform locations — instanced
             self._u_inst_pv = glGetUniformLocation(self._inst_prog, b"uPV")
@@ -487,7 +497,7 @@ class GLGridView(QOpenGLWidget):
         self._rebuild_instance_buffers()
 
         glEnable(GL_DEPTH_TEST)   # QPainter may have disabled this in a prior frame
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)
 
         proj, view = self._get_proj_view()
         pv = proj * view
@@ -520,6 +530,41 @@ class GLGridView(QOpenGLWidget):
         glDrawArrays(GL_LINES, 0, self._grid_n)
         glBindVertexArray(0)
 
+        # --- Selection outline (stencil + back-face extrusion) ---
+        # Drawn BEFORE the instanced tiles so the model surface renders on top,
+        # leaving the outline visible only at the silhouette edge.
+        # Pass 1: stamp stencil=1 where the tile mesh sits (no colour write).
+        # Pass 2: draw enlarged shell (front-faces culled) only where stencil==0 —
+        #         the ring outside the mesh that the model will NOT cover.
+        if self._selection:
+            glEnable(GL_STENCIL_TEST)
+            glUseProgram(self._outline_prog)
+
+            # Disable depth writes for both passes — the depth buffer must only
+            # be written by the instanced tile draw that follows, otherwise the
+            # decimated outline mesh causes z-fighting with the rendered tiles.
+            glDepthMask(GL_FALSE)
+
+            # Pass 1 — write stencil, suppress colour
+            glStencilFunc(GL_ALWAYS, 1, 0xFF)
+            glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE)
+            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE)
+            for pt in self._selection:
+                self._draw_tile_outline(pt, proj, view, scale=1.0)
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE)
+
+            # Pass 2 — draw outline only where stencil == 0
+            glStencilFunc(GL_NOTEQUAL, 1, 0xFF)
+            glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP)
+            glCullFace(GL_FRONT)
+            glUniform4f(self._u_outline_color, 0.0, 0.47, 0.83, 1.0)  # #0078D4
+            for pt in self._selection:
+                self._draw_tile_outline(pt, proj, view, scale=1.04)
+            glCullFace(GL_BACK)
+
+            glDepthMask(GL_TRUE)
+            glDisable(GL_STENCIL_TEST)
+
         # --- Placed tiles (instanced — one draw call per unique mesh+LOD) ---
         glUseProgram(self._inst_prog)
         glUniformMatrix4fv(self._u_inst_pv, 1, GL_FALSE, pv_arr)
@@ -530,21 +575,6 @@ class GLGridView(QOpenGLWidget):
             glBindVertexArray(inst_vao)
             glDrawArraysInstanced(GL_TRIANGLES, 0, n_verts, count)
         glBindVertexArray(0)
-
-        # --- Selection highlights ---
-        if self._selection:
-            glEnable(GL_BLEND)
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-            glUseProgram(self._flat_prog)
-            glUniformMatrix4fv(self._u_flat_mvp, 1, GL_FALSE, pv_arr)
-            for pt in self._selection:
-                gx = float(pt.grid_x)
-                gy = float(pt.grid_y)
-                w  = float(pt.effective_w)
-                h  = float(pt.effective_h)
-                z  = pt.z_offset + pt.definition.grid_z + 0.01
-                self._draw_flat_rect(gx, gy, w, h, z, (0.0, 0.47, 0.83, 0.35))
-            glDisable(GL_BLEND)
 
         # --- Ghost draws (move, paste, placement) — disable culling so semi-transparent
         #     tiles are visible from all angles regardless of winding ---
@@ -677,6 +707,43 @@ class GLGridView(QOpenGLWidget):
         glUniform3f(self._u_ns,   *ns)
         glUniform3f(self._u_col,  defn.color.redF(), defn.color.greenF(), defn.color.blueF())
         glUniform1f(self._u_alpha, alpha)
+
+        glBindVertexArray(vao)
+        glDrawArrays(GL_TRIANGLES, 0, n_verts)
+        glBindVertexArray(0)
+
+    def _draw_tile_outline(self, pt: PlacedTile, proj: QMatrix4x4, view: QMatrix4x4,
+                           scale: float = 1.04) -> None:
+        """Draw a solid-colour back-face shell slightly larger than the tile mesh.
+
+        With GL_CULL_FACE set to GL_FRONT the enlarged back-faces that extend
+        beyond the original surface form a clean 3D outline.
+        """
+        defn = pt.definition
+        key  = (defn.stl_path, 0)
+        if key not in self._mesh_cache:
+            return
+        vao, _vbo, n_verts = self._mesh_cache[key]
+
+        ew = float(pt.effective_w) * scale
+        eh = float(pt.effective_h) * scale
+        gz = float(defn.grid_z)    * scale
+
+        # Shift origin so the enlarged tile stays centred on the original
+        gx    = float(pt.grid_x)   - float(pt.effective_w) * (scale - 1) * 0.5
+        gy    = float(pt.grid_y)   - float(pt.effective_h) * (scale - 1) * 0.5
+        gz_o  = pt.z_offset        - float(defn.grid_z)    * (scale - 1) * 0.5
+
+        model = QMatrix4x4()
+        model.translate(gx, gy, gz_o)
+        model.scale(ew, eh, gz)
+        if pt.rotation != 0:
+            model.translate(0.5, 0.5, 0.0)
+            model.rotate(float(pt.rotation), 0.0, 0.0, 1.0)
+            model.translate(-0.5, -0.5, 0.0)
+
+        mvp_arr = np.array((proj * view * model).data(), dtype=np.float32)
+        glUniformMatrix4fv(self._u_outline_mvp, 1, GL_FALSE, mvp_arr)
 
         glBindVertexArray(vao)
         glDrawArrays(GL_TRIANGLES, 0, n_verts)

@@ -574,9 +574,10 @@ class MainWindow(QMainWindow):
         self._mark_dirty()
         self._update_status()
 
-    def _on_tile_removed(self, gx: int, gy: int) -> None:
+    def _on_tile_removed(self, tile) -> None:
         self._snapshot()
-        self._model.remove_at(gx, gy)
+        self._model.remove_tile(tile)
+        self._view._selection.discard(tile)
         self._view.refresh()
         self._mark_dirty()
         self._update_status()

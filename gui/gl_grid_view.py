@@ -159,7 +159,7 @@ def _ray_triangles_min_t(origin: np.ndarray, direction: np.ndarray,
 
 class GLGridView(QOpenGLWidget):
     tile_place_requested       = pyqtSignal(float, float)
-    tile_remove_requested      = pyqtSignal(int, int)
+    tile_remove_requested      = pyqtSignal(object)   # emits PlacedTile
     tile_pickup_requested      = pyqtSignal(object)   # emits PlacedTile
     tiles_move_requested       = pyqtSignal(object)   # emits list of (PlacedTile, new_gx, new_gy)
     selection_rotate_requested = pyqtSignal()
@@ -805,6 +805,50 @@ class GLGridView(QOpenGLWidget):
             return -1, -1
         return int(math.floor(world[0])), int(math.floor(world[1]))
 
+    def _tile_verts_in_box(self, pt: 'PlacedTile', pv_np: np.ndarray,
+                           rx: tuple, ry: tuple, sw: int, sh: int) -> bool:
+        """Return True if any projected mesh vertex of pt falls inside the screen box rx×ry."""
+        defn = pt.definition
+        if defn.view_triangles is None or len(defn.view_triangles) == 0:
+            return False
+
+        ew = float(pt.effective_w)
+        eh = float(pt.effective_h)
+        gz = float(defn.grid_z)
+
+        model_mat = QMatrix4x4()
+        model_mat.translate(float(pt.grid_x), float(pt.grid_y), pt.z_offset)
+        model_mat.scale(ew, eh, gz)
+        if pt.rotation != 0:
+            model_mat.translate(0.5, 0.5, 0.0)
+            model_mat.rotate(float(pt.rotation), 0.0, 0.0, 1.0)
+            model_mat.translate(-0.5, -0.5, 0.0)
+
+        # Qt stores matrices column-major; reshape gives M^T so clip = h @ model_np @ pv_np
+        model_np = np.array(model_mat.data(), dtype=np.float32).reshape(4, 4)
+        mvp_np   = model_np @ pv_np   # (PV @ model)^T — applied as h @ mvp_np
+
+        # All triangle vertices as homogeneous (N*3, 4)
+        verts = defn.view_triangles.reshape(-1, 3)          # (N*3, 3)
+        h = np.ones((len(verts), 4), dtype=np.float32)
+        h[:, :3] = verts
+        clip = h @ mvp_np                                    # (N*3, 4) clip-space
+
+        w_vals = clip[:, 3]
+        visible = w_vals > 1e-6
+        if not np.any(visible):
+            return False
+
+        ndc_x = clip[:, 0] / np.where(visible, w_vals, 1.0)
+        ndc_y = clip[:, 1] / np.where(visible, w_vals, 1.0)
+        sx_all = (ndc_x * 0.5 + 0.5) * sw
+        sy_all = (1.0 - (ndc_y * 0.5 + 0.5)) * sh
+
+        hit = (visible &
+               (sx_all >= rx[0]) & (sx_all <= rx[1]) &
+               (sy_all >= ry[0]) & (sy_all <= ry[1]))
+        return bool(np.any(hit))
+
     def _pick_tile(self, sx: int, sy: int) -> Optional['PlacedTile']:
         """Return the front-most PlacedTile whose mesh the screen ray hits."""
         w, h = max(self.width(), 1), max(self.height(), 1)
@@ -1075,22 +1119,17 @@ class GLGridView(QOpenGLWidget):
                 if moves:
                     self.tiles_move_requested.emit(moves)
             elif self._box_start_screen is not None:
-                # Finalise rubber-band box select
+                # Finalise rubber-band box select — tile selected if any mesh vertex inside box
                 x0, y0 = self._box_start_screen
                 x1, y1 = event.x(), event.y()
                 rx = (min(x0, x1), max(x0, x1))
                 ry = (min(y0, y1), max(y0, y1))
                 proj, view = self._get_proj_view()
-                pv = proj * view
                 sw, sh = max(self.width(), 1), max(self.height(), 1)
+                # pv_np: Qt column-major → numpy gives (PV)^T, used as h @ pv_np
+                pv_np = np.array((proj * view).data(), dtype=np.float32).reshape(4, 4)
                 for pt in self._model.all_placed():
-                    cx = pt.grid_x + pt.effective_w / 2.0
-                    cy = pt.grid_y + pt.effective_h / 2.0
-                    # map() returns NDC (perspective divide already done)
-                    ndc = pv.map(QVector3D(cx, cy, pt.z_offset))
-                    sx = (ndc.x() * 0.5 + 0.5) * sw
-                    sy = (1.0 - (ndc.y() * 0.5 + 0.5)) * sh
-                    if rx[0] <= sx <= rx[1] and ry[0] <= sy <= ry[1]:
+                    if self._tile_verts_in_box(pt, pv_np, rx, ry, sw, sh):
                         self._selection.add(pt)
             # Reset move/box state
             self._box_start_screen = None
@@ -1113,9 +1152,9 @@ class GLGridView(QOpenGLWidget):
         if event.button() == Qt.RightButton and hasattr(self, '_drag_start'):
             d = event.pos() - self._drag_start
             if abs(d.x()) < 5 and abs(d.y()) < 5:
-                gx, gy = self._ray_to_grid(event.x(), event.y())
-                if gx >= 0:
-                    self.tile_remove_requested.emit(gx, gy)
+                tile = self._pick_tile(event.x(), event.y())
+                if tile is not None:
+                    self.tile_remove_requested.emit(tile)
             del self._drag_start
         self._drag_button = None
         self._last_mouse  = None
@@ -1139,9 +1178,10 @@ class GLGridView(QOpenGLWidget):
             else:
                 self.rotate_requested.emit()
         elif key == Qt.Key_Delete:
-            gx, gy = self._hover_cell
-            if gx >= 0:
-                self.tile_remove_requested.emit(gx, gy)
+            mx, my = self._mouse_screen
+            tile = self._pick_tile(mx, my)
+            if tile is not None:
+                self.tile_remove_requested.emit(tile)
         elif key == Qt.Key_Home:
             self._reset_camera()
         elif key == Qt.Key_Control:

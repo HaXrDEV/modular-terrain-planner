@@ -74,15 +74,19 @@ python main.py
    - **Shift + left-click** to add or remove tiles from the selection.
    - **Left-drag over empty space** to draw a rubber-band box and select all tiles inside it.
    - **Left-drag a selected tile** to move the entire selection (snaps to grid; hold **Ctrl** for free placement).
+   - **R** while dragging rotates the group around its centroid.
    - **Esc** clears the selection.
-7. **Navigate the main camera**:
+7. **Copy & paste** — With tiles selected:
+   - **Ctrl+C** copies the selection.
+   - **Ctrl+V** enters paste ghost mode — semi-transparent ghost tiles follow the cursor. Left-click to place a copy (paste mode stays active for repeated placements). **Esc** exits paste mode.
+8. **Navigate the main camera**:
    - **Right-drag** — Orbit (azimuth / elevation)
    - **Middle-drag** — Pan
    - **Scroll wheel** — Zoom in / out
    - **Home** — Reset camera to default position
-8. **Manage folders** — Click the × on a tab to unload that folder. Tiles already placed on the grid remain.
-9. **Battle map overlay** — Go to *Edit → Set Ground Image…*, pick an image file, then set its X/Y offset and width/height in grid cells so it lines up with your tile grid. Use *Edit → Clear Ground Image* to remove it.
-10. **Export** — Click *Export CSV* to save a print list with tile names and quantities.
+9. **Manage folders** — Click the × on a tab to unload that folder. Tiles already placed on the grid remain.
+10. **Battle map overlay** — Go to *Edit → Set Ground Image…*, pick an image file, then set its X/Y offset and width/height in grid cells so it lines up with your tile grid. Use *Edit → Clear Ground Image* to remove it.
+11. **Export** — Click *Export CSV* to save a print list with tile names and quantities.
 
 ---
 

@@ -162,6 +162,7 @@ class GLGridView(QOpenGLWidget):
     tile_remove_requested      = pyqtSignal(object)   # emits PlacedTile
     tile_pickup_requested      = pyqtSignal(object)   # emits PlacedTile
     tiles_move_requested       = pyqtSignal(object)   # emits list of (PlacedTile, new_gx, new_gy)
+    paste_place_requested      = pyqtSignal(float, float)  # cx, cy (snapped grid coords)
     selection_rotate_requested = pyqtSignal()
     rotate_requested           = pyqtSignal()
     deselect_requested         = pyqtSignal()
@@ -217,6 +218,9 @@ class GLGridView(QOpenGLWidget):
         # Pending placement
         self._pending_def: Optional[TileDefinition] = None
         self._pending_rot: int = 0
+
+        # Paste ghost buffer: list of (TileDefinition, rel_x, rel_y, rotation, rel_z)
+        self._paste_buffer: Optional[list] = None
 
         # GPU resources (populated in initializeGL / load_definitions)
         self._mesh_prog  = 0
@@ -278,9 +282,17 @@ class GLGridView(QOpenGLWidget):
     def set_pending_tile(self, definition: Optional[TileDefinition], rotation: int) -> None:
         self._pending_def = definition
         self._pending_rot = rotation
+        # Entering palette-tile mode cancels paste ghost mode
+        if definition is not None:
+            self._paste_buffer = None
         # Recompute hover so the tile pivots around the current cursor position
         mx, my = self._mouse_screen
         self._hover_cell = self._compute_hover_cell(mx, my)
+        self.update()
+
+    def set_paste_buffer(self, buf: Optional[list]) -> None:
+        """Enter paste-ghost mode. buf is list of (TileDefinition, rel_x, rel_y, rotation, rel_z)."""
+        self._paste_buffer = buf
         self.update()
 
     def refresh(self) -> None:
@@ -519,6 +531,22 @@ class GLGridView(QOpenGLWidget):
                 self._draw_tile(ghost, proj, view, alpha=0.5)
             glDisable(GL_BLEND)
 
+        # --- Paste ghost preview ---
+        if self._paste_buffer is not None:
+            world = self._ray_to_world(*self._mouse_screen, 0.0)
+            if world is not None:
+                cx = round(world[0])
+                cy = round(world[1])
+                glEnable(GL_BLEND)
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+                glUseProgram(self._mesh_prog)
+                for defn, rel_x, rel_y, rotation, rel_z in self._paste_buffer:
+                    gx = cx + rel_x
+                    gy = cy + rel_y
+                    ghost = PlacedTile(defn, gx, gy, rotation, rel_z)
+                    self._draw_tile(ghost, proj, view, alpha=0.5)
+                glDisable(GL_BLEND)
+
         # --- Ghost preview (pending placement) ---
         fx, fy = self._hover_pos
         free_mode = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
@@ -616,6 +644,31 @@ class GLGridView(QOpenGLWidget):
         glBindVertexArray(vao)
         glDrawArrays(GL_TRIANGLES, 0, n_verts)
         glBindVertexArray(0)
+
+    def _rotate_paste_buffer(self) -> None:
+        """Rotate all paste ghosts 90° CCW around their group centroid (R during paste mode)."""
+        if not self._paste_buffer:
+            return
+        new_buf = []
+        for defn, rel_x, rel_y, rotation, rel_z in self._paste_buffer:
+            # Effective dims at current rotation
+            if rotation in (90, 270):
+                old_ew = float(defn.grid_h)
+                old_eh = float(defn.grid_w)
+            else:
+                old_ew = float(defn.grid_w)
+                old_eh = float(defn.grid_h)
+            # Rotate tile centre 90° CCW: (cx, cy) → (-cy, cx), centroid is at origin
+            # new_rel_x = -(rel_y + old_eh/2) - new_ew/2  where new_ew = old_eh
+            #           = -rel_y - old_eh
+            # new_rel_y = (rel_x + old_ew/2) - new_eh/2   where new_eh = old_ew
+            #           = rel_x
+            new_rel_x = -rel_y - old_eh
+            new_rel_y = rel_x
+            new_rot = (rotation + 90) % 360
+            new_buf.append((defn, new_rel_x, new_rel_y, new_rot, rel_z))
+        self._paste_buffer = new_buf
+        self.update()
 
     def _rotate_move_ghosts(self) -> None:
         """Rotate ghost positions 90° CCW around their group centroid (R during drag)."""
@@ -978,6 +1031,14 @@ class GLGridView(QOpenGLWidget):
                     self._img_dragging = True
                     self._img_drag_start_world = world
                     self._img_drag_start_rect = list(self._img_rect)
+            elif self._paste_buffer is not None:
+                # Paste mode — place the ghost group at the cursor position
+                world = self._ray_to_world(event.x(), event.y(), 0.0)
+                if world is None:
+                    world = (self._model.GRID_COLS / 2.0, self._model.GRID_ROWS / 2.0)
+                cx = round(world[0])
+                cy = round(world[1])
+                self.paste_place_requested.emit(float(cx), float(cy))
             elif self._pending_def is None:
                 # Selection mode — test against actual mesh geometry
                 tile = self._pick_tile(event.x(), event.y())
@@ -1090,7 +1151,7 @@ class GLGridView(QOpenGLWidget):
             else:
                 new_cell = self._compute_hover_cell(event.x(), event.y())
                 self._hover_pos = (float(new_cell[0]), float(new_cell[1]))
-            if new_cell != self._hover_cell or free_mode:
+            if new_cell != self._hover_cell or free_mode or self._paste_buffer is not None:
                 self._hover_cell = new_cell
                 self.hover_cell_changed.emit(*new_cell)
                 self.update()
@@ -1168,10 +1229,16 @@ class GLGridView(QOpenGLWidget):
     def keyPressEvent(self, event) -> None:
         key = event.key()
         if key == Qt.Key_Escape:
+            if self._paste_buffer is not None:
+                self._paste_buffer = None
+                self.update()
+                return
             self._selection.clear()
             self.deselect_requested.emit()
         elif key == Qt.Key_R:
-            if self._move_dragging and self._selection:
+            if self._paste_buffer is not None:
+                self._rotate_paste_buffer()
+            elif self._move_dragging and self._selection:
                 self._rotate_move_ghosts()
             elif self._selection and self._pending_def is None:
                 self.selection_rotate_requested.emit()

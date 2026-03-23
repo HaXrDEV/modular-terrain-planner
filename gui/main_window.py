@@ -49,6 +49,9 @@ class MainWindow(QMainWindow):
         self._redo_stack: List[dict] = []
         _MAX_UNDO = 100
 
+        # Copy / paste clipboard: list of (TileDefinition, rel_x, rel_y, rotation, rel_z)
+        self._clipboard: list = []
+
         # Multi-folder tracking
         self._all_definitions: Dict[str, TileDefinition] = {}
         self._loaded_folders: Dict[str, List[str]] = {}
@@ -99,6 +102,7 @@ class MainWindow(QMainWindow):
         self._view.selection_rotate_requested.connect(self._on_selection_rotate)
         self._view.rotate_requested.connect(self._on_rotate)
         self._view.deselect_requested.connect(self._on_deselect)
+        self._view.paste_place_requested.connect(self._on_paste_place)
         self._view.ground_image_rect_changed.connect(self._on_ground_image_moved)
 
         self._img_scale_slider.valueChanged.connect(self._on_img_scale_changed)
@@ -180,6 +184,18 @@ class MainWindow(QMainWindow):
         self._act_redo.setEnabled(False)
         self._act_redo.triggered.connect(self._on_redo)
         edit_menu.addAction(self._act_redo)
+
+        edit_menu.addSeparator()
+
+        self._act_copy = QAction("&Copy", self)
+        self._act_copy.setShortcut("Ctrl+C")
+        self._act_copy.triggered.connect(self._on_copy)
+        edit_menu.addAction(self._act_copy)
+
+        self._act_paste = QAction("&Paste", self)
+        self._act_paste.setShortcut("Ctrl+V")
+        self._act_paste.triggered.connect(self._on_paste)
+        edit_menu.addAction(self._act_paste)
 
         edit_menu.addSeparator()
 
@@ -594,6 +610,45 @@ class MainWindow(QMainWindow):
             new_tiles.append(new_tile)
         # Update selection to the newly created PlacedTile objects
         self._view._selection = set(new_tiles)
+        self._view.refresh()
+        self._mark_dirty()
+        self._update_status()
+
+    def _on_copy(self) -> None:
+        selection = list(self._view._selection)
+        if not selection:
+            return
+        # Store positions relative to the group centroid
+        cx = sum(t.grid_x + t.effective_w / 2.0 for t in selection) / len(selection)
+        cy = sum(t.grid_y + t.effective_h / 2.0 for t in selection) / len(selection)
+        min_z = min(t.z_offset for t in selection)
+        self._clipboard = [
+            (t.definition, t.grid_x - cx, t.grid_y - cy, t.rotation, t.z_offset - min_z)
+            for t in selection
+        ]
+
+    def _on_paste(self) -> None:
+        if not self._clipboard:
+            return
+        # Enter ghost-paste mode — ghosts follow the cursor until left-click or Escape
+        self._view.set_paste_buffer(list(self._clipboard))
+
+    def _on_paste_place(self, cx: float, cy: float) -> None:
+        """Called when the user left-clicks during paste ghost mode."""
+        if not self._clipboard:
+            self._view.set_paste_buffer(None)
+            return
+        self._snapshot()
+        new_tiles = []
+        for defn, rel_x, rel_y, rotation, rel_z in self._clipboard:
+            new_gx = cx + rel_x
+            new_gy = cy + rel_y
+            new_tile = PlacedTile(defn, new_gx, new_gy, rotation, rel_z)
+            self._model.force_place(new_tile)
+            new_tiles.append(new_tile)
+        self._view._selection = set(new_tiles)
+        # Keep paste mode active so the user can place multiple copies
+        self._view.set_paste_buffer(list(self._clipboard))
         self._view.refresh()
         self._mark_dirty()
         self._update_status()

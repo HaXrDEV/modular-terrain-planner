@@ -95,6 +95,8 @@ class MainWindow(QMainWindow):
         self._view.tile_place_requested.connect(self._on_tile_placed)
         self._view.tile_remove_requested.connect(self._on_tile_removed)
         self._view.tile_pickup_requested.connect(self._on_tile_pickup)
+        self._view.tiles_move_requested.connect(self._on_tiles_moved)
+        self._view.selection_rotate_requested.connect(self._on_selection_rotate)
         self._view.rotate_requested.connect(self._on_rotate)
         self._view.deselect_requested.connect(self._on_deselect)
         self._view.ground_image_rect_changed.connect(self._on_ground_image_moved)
@@ -440,6 +442,7 @@ class MainWindow(QMainWindow):
         self._update_undo_actions()
         # Rebuild palette (clear all tabs) and GL cache
         self._palette.clear_all_tabs()
+        self._view._selection.clear()
         self._view.load_definitions([])
         self._view.clear_ground_image()
         self._update_title()
@@ -574,6 +577,59 @@ class MainWindow(QMainWindow):
     def _on_tile_removed(self, gx: int, gy: int) -> None:
         self._snapshot()
         self._model.remove_at(gx, gy)
+        self._view.refresh()
+        self._mark_dirty()
+        self._update_status()
+
+    def _on_tiles_moved(self, moves: list) -> None:
+        """moves: list of (PlacedTile, new_gx, new_gy, new_rotation)"""
+        self._snapshot()
+        new_tiles = []
+        for tile, new_gx, new_gy, new_rot in moves:
+            self._model.remove_tile(tile)
+            new_tile = PlacedTile(tile.definition, new_gx, new_gy,
+                                  new_rot, tile.z_offset)
+            self._model.force_place(new_tile)
+            new_tiles.append(new_tile)
+        # Update selection to the newly created PlacedTile objects
+        self._view._selection = set(new_tiles)
+        self._view.refresh()
+        self._mark_dirty()
+        self._update_status()
+
+    def _on_selection_rotate(self) -> None:
+        self._snapshot()
+        selection = list(self._view._selection)
+
+        # Group centroid (average of each tile's centre)
+        group_cx = sum(t.grid_x + t.effective_w / 2.0 for t in selection) / len(selection)
+        group_cy = sum(t.grid_y + t.effective_h / 2.0 for t in selection) / len(selection)
+
+        new_tiles = []
+        for tile in selection:
+            new_rot = (tile.rotation + 90) % 360
+            old_ew, old_eh = float(tile.effective_w), float(tile.effective_h)
+            new_ew, new_eh = old_eh, old_ew   # dims swap after 90°
+
+            # Rotate this tile's centre 90° CCW around the group centroid
+            rx = tile.grid_x + old_ew / 2.0 - group_cx
+            ry = tile.grid_y + old_eh / 2.0 - group_cy
+            new_tile_cx = group_cx - ry
+            new_tile_cy = group_cy + rx
+
+            new_gx = round(new_tile_cx - new_ew / 2.0)
+            new_gy = round(new_tile_cy - new_eh / 2.0)
+            self._model.remove_tile(tile)
+            new_tile = PlacedTile(tile.definition, new_gx, new_gy, new_rot, tile.z_offset)
+            self._model.force_place(new_tile)
+            new_tiles.append(new_tile)
+
+        self._view._selection = set(new_tiles)
+        # Snap offsets reference the old tile objects — cancel any in-progress drag
+        self._view._move_world_start = None
+        self._view._move_snap_offsets.clear()
+        self._view._move_dragging = False
+        self._view._move_delta = (0.0, 0.0)
         self._view.refresh()
         self._mark_dirty()
         self._update_status()

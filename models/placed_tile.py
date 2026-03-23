@@ -7,6 +7,8 @@ from models.tile_definition import TileDefinition
 
 @dataclass
 class PlacedTile:
+    # Use identity-based hashing so PlacedTile instances can live in sets/dicts
+    __hash__ = object.__hash__
     definition: TileDefinition
     grid_x: float   # may be fractional for free-placed tiles
     grid_y: float   # may be fractional for free-placed tiles

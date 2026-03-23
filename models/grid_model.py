@@ -89,5 +89,13 @@ class GridModel:
                 return False
         return True
 
+    def remove_tile(self, tile: PlacedTile) -> bool:
+        """Remove a specific PlacedTile by identity (not value equality)."""
+        for i, pt in enumerate(self._placed):
+            if pt is tile:
+                self._placed.pop(i)
+                return True
+        return False
+
     def clear(self) -> None:
         self._placed.clear()

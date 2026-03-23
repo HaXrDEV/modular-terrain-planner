@@ -28,7 +28,7 @@ try:
     from OpenGL.GL import (
         GL_ARRAY_BUFFER, GL_COLOR_BUFFER_BIT, GL_COMPILE_STATUS,
         GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST, GL_FALSE, GL_FLOAT,
-        GL_FRAGMENT_SHADER, GL_LINES, GL_LINK_STATUS, GL_STATIC_DRAW,
+        GL_FRAGMENT_SHADER, GL_LINE_LOOP, GL_LINES, GL_LINK_STATUS, GL_STATIC_DRAW,
         GL_TRIANGLES, GL_VERTEX_SHADER, GL_BLEND, GL_SRC_ALPHA,
         GL_ONE_MINUS_SRC_ALPHA,
         GL_TEXTURE_2D, GL_TEXTURE0, GL_LINEAR, GL_CLAMP_TO_EDGE,
@@ -106,6 +106,8 @@ class GLGridView(QOpenGLWidget):
     tile_place_requested       = pyqtSignal(float, float)
     tile_remove_requested      = pyqtSignal(int, int)
     tile_pickup_requested      = pyqtSignal(object)   # emits PlacedTile
+    tiles_move_requested       = pyqtSignal(object)   # emits list of (PlacedTile, new_gx, new_gy)
+    selection_rotate_requested = pyqtSignal()
     rotate_requested           = pyqtSignal()
     deselect_requested         = pyqtSignal()
     hover_cell_changed         = pyqtSignal(int, int)
@@ -147,6 +149,16 @@ class GLGridView(QOpenGLWidget):
         self._img_drag_start_world: Optional[Tuple[float, float]] = None
         self._img_drag_start_rect: Optional[list] = None
 
+        # Selection & move
+        self._selection: set = set()
+        self._box_start_screen: Optional[Tuple[int, int]] = None
+        self._box_end_screen: Optional[Tuple[int, int]] = None
+        self._move_world_start: Optional[Tuple[float, float]] = None
+        self._move_snap_offsets: dict = {}
+        self._move_rotations: dict = {}        # {PlacedTile: rotation override}
+        self._move_dragging: bool = False
+        self._move_delta: Tuple[float, float] = (0.0, 0.0)
+
         # Pending placement
         self._pending_def: Optional[TileDefinition] = None
         self._pending_rot: int = 0
@@ -158,6 +170,7 @@ class GLGridView(QOpenGLWidget):
         self._mesh_cache: Dict[Tuple[str, int], Tuple[int, int, int]] = {}
         self._ground_vao = self._ground_vbo = self._ground_n = 0
         self._grid_vao   = self._grid_vbo   = self._grid_n   = 0
+        self._sel_vao    = self._sel_vbo    = 0   # scratch VAO for selection highlights
         self._ready      = False  # True after initializeGL succeeds
         self._bg           = (0.10, 0.10, 0.12)  # void background colour
         self._ground_col   = (0.22, 0.22, 0.25)  # ground plane fill
@@ -353,6 +366,18 @@ class GLGridView(QOpenGLWidget):
             glClearColor(*self._bg, 1.0)
 
             self._build_static_geometry()
+
+            # Scratch VAO for selection highlight quads (updated each frame)
+            self._sel_vao = int(glGenVertexArrays(1))
+            self._sel_vbo = int(glGenBuffers(1))
+            glBindVertexArray(self._sel_vao)
+            glBindBuffer(GL_ARRAY_BUFFER, self._sel_vbo)
+            placeholder = np.zeros(18, dtype=np.float32)
+            glBufferData(GL_ARRAY_BUFFER, placeholder.nbytes, placeholder, GL_STATIC_DRAW)
+            glEnableVertexAttribArray(0)
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
+            glBindVertexArray(0)
+
             self._ready = True
 
             # Upload any definitions that arrived before GL was ready
@@ -369,6 +394,7 @@ class GLGridView(QOpenGLWidget):
     def paintGL(self) -> None:
         if not self._ready:
             return
+        glEnable(GL_DEPTH_TEST)   # QPainter may have disabled this in a prior frame
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
         proj, view = self._get_proj_view()
@@ -407,7 +433,38 @@ class GLGridView(QOpenGLWidget):
         for pt in self._model.all_placed():
             self._draw_tile(pt, proj, view, alpha=1.0)
 
-        # --- Ghost preview ---
+        # --- Selection highlights ---
+        if self._selection:
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glUseProgram(self._flat_prog)
+            glUniformMatrix4fv(self._u_flat_mvp, 1, GL_FALSE, pv_arr)
+            for pt in self._selection:
+                gx = float(pt.grid_x)
+                gy = float(pt.grid_y)
+                w  = float(pt.effective_w)
+                h  = float(pt.effective_h)
+                z  = pt.z_offset + pt.definition.grid_z + 0.01
+                self._draw_flat_rect(gx, gy, w, h, z, (0.0, 0.47, 0.83, 0.35))
+            glDisable(GL_BLEND)
+
+        # --- Move ghost ---
+        if self._move_dragging and self._selection:
+            dx, dy = self._move_delta
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glUseProgram(self._mesh_prog)
+            for pt in self._selection:
+                offsets = self._move_snap_offsets.get(pt)
+                if offsets is None:
+                    continue
+                ox, oy = offsets
+                rot = self._move_rotations.get(pt, pt.rotation)
+                ghost = PlacedTile(pt.definition, ox + dx, oy + dy, rot, pt.z_offset)
+                self._draw_tile(ghost, proj, view, alpha=0.5)
+            glDisable(GL_BLEND)
+
+        # --- Ghost preview (pending placement) ---
         fx, fy = self._hover_pos
         free_mode = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
         if self._pending_def is not None and fx >= -self._pending_def.grid_w:
@@ -417,8 +474,46 @@ class GLGridView(QOpenGLWidget):
             if free_mode or self._model.can_place(ghost):
                 glEnable(GL_BLEND)
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+                glUseProgram(self._mesh_prog)
                 self._draw_tile(ghost, proj, view, alpha=0.45)
                 glDisable(GL_BLEND)
+
+        # --- Rubber-band selection box (native GL, screen-space ortho) ---
+        if self._box_start_screen is not None and self._box_end_screen is not None:
+            x0, y0 = float(self._box_start_screen[0]), float(self._box_start_screen[1])
+            x1, y1 = float(self._box_end_screen[0]),   float(self._box_end_screen[1])
+            ortho = QMatrix4x4()
+            ortho.ortho(0, max(self.width(), 1), max(self.height(), 1), 0, -1, 1)
+            ortho_arr = np.array(ortho.data(), dtype=np.float32)
+
+            glDisable(GL_DEPTH_TEST)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glUseProgram(self._flat_prog)
+            glUniformMatrix4fv(self._u_flat_mvp, 1, GL_FALSE, ortho_arr)
+
+            # Filled interior
+            fill = np.array([
+                x0, y0, 0,  x1, y0, 0,  x1, y1, 0,
+                x0, y0, 0,  x1, y1, 0,  x0, y1, 0,
+            ], dtype=np.float32)
+            glBindVertexArray(self._sel_vao)
+            glBindBuffer(GL_ARRAY_BUFFER, self._sel_vbo)
+            glBufferData(GL_ARRAY_BUFFER, fill.nbytes, fill, GL_STATIC_DRAW)
+            glUniform4f(self._u_flat_col, 0.0, 0.47, 0.83, 0.12)
+            glDrawArrays(GL_TRIANGLES, 0, 6)
+
+            # Border
+            border = np.array([
+                x0, y0, 0,  x1, y0, 0,  x1, y1, 0,  x0, y1, 0,
+            ], dtype=np.float32)
+            glBufferData(GL_ARRAY_BUFFER, border.nbytes, border, GL_STATIC_DRAW)
+            glUniform4f(self._u_flat_col, 0.0, 0.47, 0.83, 0.9)
+            glDrawArrays(GL_LINE_LOOP, 0, 4)
+            glBindVertexArray(0)
+
+            glDisable(GL_BLEND)
+            glEnable(GL_DEPTH_TEST)
 
     # ------------------------------------------------------------------
     # Drawing helpers
@@ -465,6 +560,80 @@ class GLGridView(QOpenGLWidget):
 
         glBindVertexArray(vao)
         glDrawArrays(GL_TRIANGLES, 0, n_verts)
+        glBindVertexArray(0)
+
+    def _rotate_move_ghosts(self) -> None:
+        """Rotate ghost positions 90° CCW around their group centroid (R during drag)."""
+        dx, dy = self._move_delta
+
+        # Collect current ghost centres and their effective dims at current rotation
+        centers = {}
+        dims = {}
+        for pt in self._selection:
+            offsets = self._move_snap_offsets.get(pt)
+            if offsets is None:
+                continue
+            ox, oy = offsets
+            rot = self._move_rotations.get(pt, pt.rotation)
+            if rot in (90, 270):
+                ew = float(pt.definition.grid_h)
+                eh = float(pt.definition.grid_w)
+            else:
+                ew = float(pt.definition.grid_w)
+                eh = float(pt.definition.grid_h)
+            gx = ox + dx
+            gy = oy + dy
+            centers[pt] = (gx + ew / 2.0, gy + eh / 2.0)
+            dims[pt] = (ew, eh)
+
+        if not centers:
+            return
+
+        # Group centroid
+        group_cx = sum(c[0] for c in centers.values()) / len(centers)
+        group_cy = sum(c[1] for c in centers.values()) / len(centers)
+
+        new_snap = {}
+        new_rots = {}
+        for pt in self._selection:
+            if pt not in centers:
+                continue
+            cur_cx, cur_cy = centers[pt]
+            old_ew, old_eh = dims[pt]
+            new_ew, new_eh = old_eh, old_ew   # swap after 90°
+            new_rot = (self._move_rotations.get(pt, pt.rotation) + 90) % 360
+
+            # Rotate centre 90° CCW around group centroid
+            rx = cur_cx - group_cx
+            ry = cur_cy - group_cy
+            new_cx = group_cx - ry
+            new_cy = group_cy + rx
+
+            # Back out the current delta to get the new snap offset
+            new_snap[pt] = (new_cx - new_ew / 2.0 - dx,
+                            new_cy - new_eh / 2.0 - dy)
+            new_rots[pt] = new_rot
+
+        self._move_snap_offsets = new_snap
+        self._move_rotations = new_rots
+        self.update()
+
+    def _draw_flat_rect(self, x: float, y: float, w: float, h: float,
+                        z: float, rgba: tuple) -> None:
+        """Draw a flat colored quad using the flat shader (reuses scratch VAO)."""
+        verts = np.array([
+            x,     y,     z,
+            x + w, y,     z,
+            x + w, y + h, z,
+            x,     y,     z,
+            x + w, y + h, z,
+            x,     y + h, z,
+        ], dtype=np.float32)
+        glBindVertexArray(self._sel_vao)
+        glBindBuffer(GL_ARRAY_BUFFER, self._sel_vbo)
+        glBufferData(GL_ARRAY_BUFFER, verts.nbytes, verts, GL_STATIC_DRAW)
+        glUniform4f(self._u_flat_col, *rgba)
+        glDrawArrays(GL_TRIANGLES, 0, 6)
         glBindVertexArray(0)
 
     # ------------------------------------------------------------------
@@ -631,6 +800,36 @@ class GLGridView(QOpenGLWidget):
                     self._img_dragging = True
                     self._img_drag_start_world = world
                     self._img_drag_start_rect = list(self._img_rect)
+            elif self._pending_def is None:
+                # Selection mode
+                gx, gy = self._ray_to_grid(event.x(), event.y())
+                tile = self._model.topmost_at(gx, gy) if gx >= 0 else None
+                shift = bool(event.modifiers() & Qt.ShiftModifier)
+                if tile is not None:
+                    if shift:
+                        if tile in self._selection:
+                            self._selection.discard(tile)
+                        else:
+                            self._selection.add(tile)
+                    else:
+                        if tile not in self._selection:
+                            self._selection = {tile}
+                    # Prime for potential move drag
+                    world = self._ray_to_world(event.x(), event.y(), 0.0)
+                    if world and self._selection:
+                        self._move_world_start = world
+                        self._move_snap_offsets = {
+                            pt: (int(math.floor(pt.grid_x)), int(math.floor(pt.grid_y)))
+                            for pt in self._selection
+                        }
+                        self._move_rotations = {}
+                else:
+                    # Empty cell → start rubber-band
+                    if not shift:
+                        self._selection.clear()
+                    self._box_start_screen = (event.x(), event.y())
+                    self._box_end_screen   = (event.x(), event.y())
+                self.update()
             else:
                 fx, fy = self._hover_pos
                 if fx >= -self._pending_def.grid_w if self._pending_def else fx >= 0:
@@ -680,6 +879,29 @@ class GLGridView(QOpenGLWidget):
                 self.doneCurrent()
                 self.ground_image_rect_changed.emit(list(self._img_rect))
                 self.update()
+        elif self._drag_button == Qt.LeftButton and self._pending_def is None:
+            if self._box_start_screen is not None:
+                # Extend rubber-band selection box
+                self._box_end_screen = (event.x(), event.y())
+                self.update()
+            elif self._move_world_start is not None:
+                world = self._ray_to_world(event.x(), event.y(), 0.0)
+                if world:
+                    if not self._move_dragging:
+                        # Use world-space distance from press point as threshold
+                        wdx = world[0] - self._move_world_start[0]
+                        wdy = world[1] - self._move_world_start[1]
+                        if wdx * wdx + wdy * wdy > 0.09:  # ~0.3 cells
+                            self._move_dragging = True
+                    if self._move_dragging:
+                        free = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+                        raw_dx = world[0] - self._move_world_start[0]
+                        raw_dy = world[1] - self._move_world_start[1]
+                        if free:
+                            self._move_delta = (raw_dx, raw_dy)
+                        else:
+                            self._move_delta = (round(raw_dx), round(raw_dy))
+                        self.update()
         else:
             # Update hover ghost
             self._mouse_screen = (event.x(), event.y())
@@ -701,6 +923,51 @@ class GLGridView(QOpenGLWidget):
             self._img_dragging = False
             self._img_drag_start_world = None
             self._img_drag_start_rect = None
+        elif event.button() == Qt.LeftButton and self._pending_def is None:
+            if self._move_dragging and (self._move_delta != (0.0, 0.0) or self._move_rotations):
+                # Commit move (position change, rotation change, or both)
+                free = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+                dx, dy = self._move_delta
+                moves = []
+                for pt in self._selection:
+                    offsets = self._move_snap_offsets.get(pt)
+                    if offsets is None:
+                        continue
+                    ox, oy = offsets
+                    rot = self._move_rotations.get(pt, pt.rotation)
+                    if free:
+                        moves.append((pt, ox + dx, oy + dy, rot))
+                    else:
+                        moves.append((pt, ox + int(dx), oy + int(dy), rot))
+                if moves:
+                    self.tiles_move_requested.emit(moves)
+            elif self._box_start_screen is not None:
+                # Finalise rubber-band box select
+                x0, y0 = self._box_start_screen
+                x1, y1 = event.x(), event.y()
+                rx = (min(x0, x1), max(x0, x1))
+                ry = (min(y0, y1), max(y0, y1))
+                proj, view = self._get_proj_view()
+                pv = proj * view
+                sw, sh = max(self.width(), 1), max(self.height(), 1)
+                for pt in self._model.all_placed():
+                    cx = pt.grid_x + pt.effective_w / 2.0
+                    cy = pt.grid_y + pt.effective_h / 2.0
+                    # map() returns NDC (perspective divide already done)
+                    ndc = pv.map(QVector3D(cx, cy, pt.z_offset))
+                    sx = (ndc.x() * 0.5 + 0.5) * sw
+                    sy = (1.0 - (ndc.y() * 0.5 + 0.5)) * sh
+                    if rx[0] <= sx <= rx[1] and ry[0] <= sy <= ry[1]:
+                        self._selection.add(pt)
+            # Reset move/box state
+            self._box_start_screen = None
+            self._box_end_screen   = None
+            self._move_world_start = None
+            self._move_snap_offsets.clear()
+            self._move_rotations.clear()
+            self._move_dragging = False
+            self._move_delta    = (0.0, 0.0)
+            self.update()
         # Short middle-click (no pan) = pick up tile
         if event.button() == Qt.MiddleButton and hasattr(self, '_mid_press'):
             d = event.pos() - self._mid_press
@@ -731,9 +998,15 @@ class GLGridView(QOpenGLWidget):
     def keyPressEvent(self, event) -> None:
         key = event.key()
         if key == Qt.Key_Escape:
+            self._selection.clear()
             self.deselect_requested.emit()
         elif key == Qt.Key_R:
-            self.rotate_requested.emit()
+            if self._move_dragging and self._selection:
+                self._rotate_move_ghosts()
+            elif self._selection and self._pending_def is None:
+                self.selection_rotate_requested.emit()
+            else:
+                self.rotate_requested.emit()
         elif key == Qt.Key_Delete:
             gx, gy = self._hover_cell
             if gx >= 0:

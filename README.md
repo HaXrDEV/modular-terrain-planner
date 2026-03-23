@@ -18,6 +18,7 @@ A desktop tool for designing tabletop RPG dungeon layouts by placing modular ter
 - **Snap-to-grid placement** — Left-click to place, right-click to remove; pending tile centers on cursor
 - **Ghost preview** — Hover to see where a tile will land before placing it
 - **Tile rotation** — Press R to rotate the pending tile 90°; rotation pivots around the cursor
+- **Select & move** — When no tile is selected in the palette, left-click/drag to select placed tiles and reposition them; Shift-click to add to the selection; drag a box over empty space for rubber-band multi-select
 - **Battle map overlay** — Load any image (PNG/JPG/BMP) as a ground-plane texture; position and scale it to match the grid
 - **Print list export** — Export tile counts to CSV for your slicer/print queue
 - **Inches heuristic** — Automatically detects and converts inch-unit STL files (e.g. OpenForge tiles)
@@ -68,14 +69,20 @@ python main.py
 3. **Place tiles** — Move your mouse over the grid and left-click to place. The ghost preview shows where the tile will land.
 4. **Rotate** — Press **R** to rotate the pending tile 90° clockwise. The palette preview updates to match.
 5. **Remove** — Right-click a placed tile to remove it.
-6. **Navigate the main camera**:
+6. **Select & move placed tiles** — Press **Esc** to deselect any palette tile, then:
+   - **Left-click** a tile to select it (highlighted in blue); click elsewhere to deselect.
+   - **Shift + left-click** to add or remove tiles from the selection.
+   - **Left-drag over empty space** to draw a rubber-band box and select all tiles inside it.
+   - **Left-drag a selected tile** to move the entire selection (snaps to grid; hold **Ctrl** for free placement).
+   - **Esc** clears the selection.
+7. **Navigate the main camera**:
    - **Right-drag** — Orbit (azimuth / elevation)
    - **Middle-drag** — Pan
    - **Scroll wheel** — Zoom in / out
    - **Home** — Reset camera to default position
-7. **Manage folders** — Click the × on a tab to unload that folder. Tiles already placed on the grid remain.
-8. **Battle map overlay** — Go to *Edit → Set Ground Image…*, pick an image file, then set its X/Y offset and width/height in grid cells so it lines up with your tile grid. Use *Edit → Clear Ground Image* to remove it.
-9. **Export** — Click *Export CSV* to save a print list with tile names and quantities.
+8. **Manage folders** — Click the × on a tab to unload that folder. Tiles already placed on the grid remain.
+9. **Battle map overlay** — Go to *Edit → Set Ground Image…*, pick an image file, then set its X/Y offset and width/height in grid cells so it lines up with your tile grid. Use *Edit → Clear Ground Image* to remove it.
+10. **Export** — Click *Export CSV* to save a print list with tile names and quantities.
 
 ---
 

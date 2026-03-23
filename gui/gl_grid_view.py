@@ -26,8 +26,8 @@ from PyQt5.QtWidgets import QOpenGLWidget, QMessageBox
 
 try:
     from OpenGL.GL import (
-        GL_ARRAY_BUFFER, GL_COLOR_BUFFER_BIT, GL_COMPILE_STATUS,
-        GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST, GL_DYNAMIC_DRAW, GL_FALSE, GL_FLOAT,
+        GL_ARRAY_BUFFER, GL_BACK, GL_COLOR_BUFFER_BIT, GL_COMPILE_STATUS,
+        GL_CULL_FACE, GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST, GL_DYNAMIC_DRAW, GL_FALSE, GL_FLOAT,
         GL_FRAGMENT_SHADER, GL_LINE_LOOP, GL_LINES, GL_LINK_STATUS, GL_STATIC_DRAW,
         GL_TRIANGLES, GL_VERTEX_SHADER, GL_BLEND, GL_SRC_ALPHA,
         GL_ONE_MINUS_SRC_ALPHA,
@@ -41,7 +41,7 @@ try:
         glEnableVertexAttribArray,
         glGenBuffers, glGenVertexArrays, glGetProgramInfoLog, glGetProgramiv,
         glGetShaderInfoLog, glGetShaderiv, glGetUniformLocation, glLinkProgram,
-        glLineWidth, glShaderSource, glUniform1f, glUniform1i, glUniform3f,
+        glCullFace, glLineWidth, glShaderSource, glUniform1f, glUniform1i, glUniform3f,
         glUniform4f, glUniformMatrix4fv, glUseProgram, glVertexAttribDivisor,
         glVertexAttribPointer,
         glViewport, glGenTextures, glBindTexture, glTexImage2D, glTexParameteri,
@@ -446,6 +446,8 @@ class GLGridView(QOpenGLWidget):
             self._u_tex_sampler = glGetUniformLocation(p, b"uTex")
 
             glEnable(GL_DEPTH_TEST)
+            glEnable(GL_CULL_FACE)
+            glCullFace(GL_BACK)
             glClearColor(*self._bg, 1.0)
 
             self._build_static_geometry()

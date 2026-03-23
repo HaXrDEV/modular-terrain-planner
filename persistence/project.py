@@ -79,8 +79,8 @@ def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]], int, int, 
     tiles   = [
         {
             "stl_path": str(t["stl_path"]),
-            "grid_x":   int(t["grid_x"]),
-            "grid_y":   int(t["grid_y"]),
+            "grid_x":   float(t["grid_x"]),
+            "grid_y":   float(t["grid_y"]),
             "rotation": int(t["rotation"]),
             "z_offset": float(t.get("z_offset", 0.0)),
         }

@@ -4,6 +4,7 @@
 Controls
 --------
 Left-click          Place selected tile at the hovered grid cell
+Ctrl + Left-click   Place tile freely (no grid snap, overlaps allowed)
 Right-click         Remove tile at the hovered grid cell
 Right-drag          Orbit camera (azimuth / elevation)
 Middle-drag         Pan camera target
@@ -18,6 +19,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from PyQt5.QtCore import Qt, QPoint, pyqtSignal
+from PyQt5.QtWidgets import QApplication
 from PyQt5.QtGui import QImage, QMatrix4x4, QVector3D, QVector4D
 from PyQt5.QtWidgets import QOpenGLWidget, QMessageBox
 
@@ -100,7 +102,7 @@ void main() { FragColor = texture(uTex, vUV); }
 # ---------------------------------------------------------------------------
 
 class GLGridView(QOpenGLWidget):
-    tile_place_requested       = pyqtSignal(int, int)
+    tile_place_requested       = pyqtSignal(float, float)
     tile_remove_requested      = pyqtSignal(int, int)
     rotate_requested           = pyqtSignal()
     hover_cell_changed         = pyqtSignal(int, int)
@@ -126,8 +128,9 @@ class GLGridView(QOpenGLWidget):
         # Interaction
         self._last_mouse: Optional[QPoint] = None
         self._drag_button: Optional[int]   = None
-        self._hover_cell: Tuple[int, int]  = (-1, -1)
-        self._mouse_screen: Tuple[int, int] = (0, 0)
+        self._hover_cell: Tuple[int, int]     = (-1, -1)
+        self._hover_pos:  Tuple[float, float] = (-1.0, -1.0)
+        self._mouse_screen: Tuple[int, int]   = (0, 0)
 
         # Image drag state (Alt + left-drag)
         self._img_dragging: bool = False
@@ -375,11 +378,13 @@ class GLGridView(QOpenGLWidget):
             self._draw_tile(pt, proj, view, alpha=1.0)
 
         # --- Ghost preview ---
-        gx, gy = self._hover_cell
-        if self._pending_def is not None and gx >= 0:
-            z_off = self._model.top_z_at(gx, gy)
-            ghost = PlacedTile(self._pending_def, gx, gy, self._pending_rot, z_offset=z_off)
-            if self._model.can_place(ghost):
+        fx, fy = self._hover_pos
+        free_mode = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+        if self._pending_def is not None and fx >= -self._pending_def.grid_w:
+            igx, igy = int(math.floor(fx)), int(math.floor(fy))
+            z_off = self._model.top_z_at(igx, igy) if igx >= 0 else 0.0
+            ghost = PlacedTile(self._pending_def, fx, fy, self._pending_rot, z_offset=z_off)
+            if free_mode or self._model.can_place(ghost):
                 glEnable(GL_BLEND)
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
                 self._draw_tile(ghost, proj, view, alpha=0.45)
@@ -547,8 +552,7 @@ class GLGridView(QOpenGLWidget):
         return int(math.floor(world[0])), int(math.floor(world[1]))
 
     def _compute_hover_cell(self, mx: int, my: int) -> Tuple[int, int]:
-        """Return the grid origin for the pending tile centered on the cursor.
-        Falls back to raw floor position when no tile is pending."""
+        """Return the snapped grid origin for the pending tile centered on the cursor."""
         world = self._ray_to_world(mx, my, 0.0)
         if world is None:
             return -1, -1
@@ -564,6 +568,22 @@ class GLGridView(QOpenGLWidget):
         gx = int(round(hx - ew / 2.0))
         gy = int(round(hy - eh / 2.0))
         return gx, gy
+
+    def _compute_free_pos(self, mx: int, my: int) -> Tuple[float, float]:
+        """Return continuous world position for the pending tile centered on the cursor (Ctrl mode)."""
+        world = self._ray_to_world(mx, my, 0.0)
+        if world is None:
+            return -1.0, -1.0
+        hx, hy = world
+        if self._pending_def is None:
+            return hx, hy
+        if self._pending_rot in (90, 270):
+            ew = float(self._pending_def.grid_h)
+            eh = float(self._pending_def.grid_w)
+        else:
+            ew = float(self._pending_def.grid_w)
+            eh = float(self._pending_def.grid_h)
+        return hx - ew / 2.0, hy - eh / 2.0
 
     # ------------------------------------------------------------------
     # Mouse / keyboard events
@@ -582,9 +602,9 @@ class GLGridView(QOpenGLWidget):
                     self._img_drag_start_world = world
                     self._img_drag_start_rect = list(self._img_rect)
             else:
-                gx, gy = self._hover_cell
-                if gx >= 0:
-                    self.tile_place_requested.emit(gx, gy)
+                fx, fy = self._hover_pos
+                if fx >= -self._pending_def.grid_w if self._pending_def else fx >= 0:
+                    self.tile_place_requested.emit(fx, fy)
         elif event.button() == Qt.RightButton:
             # Right-click with no movement = remove tile
             self._drag_start = event.pos()
@@ -629,10 +649,17 @@ class GLGridView(QOpenGLWidget):
         else:
             # Update hover ghost
             self._mouse_screen = (event.x(), event.y())
-            gx, gy = self._compute_hover_cell(event.x(), event.y())
-            if (gx, gy) != self._hover_cell:
-                self._hover_cell = (gx, gy)
-                self.hover_cell_changed.emit(gx, gy)
+            free_mode = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+            if free_mode:
+                fx, fy = self._compute_free_pos(event.x(), event.y())
+                self._hover_pos = (fx, fy)
+                new_cell = (int(math.floor(fx)), int(math.floor(fy)))
+            else:
+                new_cell = self._compute_hover_cell(event.x(), event.y())
+                self._hover_pos = (float(new_cell[0]), float(new_cell[1]))
+            if new_cell != self._hover_cell or free_mode:
+                self._hover_cell = new_cell
+                self.hover_cell_changed.emit(*new_cell)
                 self.update()
 
     def mouseReleaseEvent(self, event) -> None:
@@ -666,8 +693,25 @@ class GLGridView(QOpenGLWidget):
                 self.tile_remove_requested.emit(gx, gy)
         elif event.key() == Qt.Key_Home:
             self._reset_camera()
+        elif event.key() == Qt.Key_Control:
+            # Switch ghost to free mode immediately
+            mx, my = self._mouse_screen
+            fx, fy = self._compute_free_pos(mx, my)
+            self._hover_pos = (fx, fy)
+            self.update()
         else:
             super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:
+        if event.key() == Qt.Key_Control:
+            # Switch ghost back to snapped mode immediately
+            mx, my = self._mouse_screen
+            cell = self._compute_hover_cell(mx, my)
+            self._hover_pos = (float(cell[0]), float(cell[1]))
+            self._hover_cell = cell
+            self.update()
+        else:
+            super().keyReleaseEvent(event)
 
     # ------------------------------------------------------------------
     # Shader compilation

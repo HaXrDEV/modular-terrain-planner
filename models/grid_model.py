@@ -35,6 +35,10 @@ class GridModel:
             return True
         return False
 
+    def force_place(self, tile: PlacedTile) -> None:
+        """Place tile unconditionally (used for free/Ctrl placement)."""
+        self._placed.append(tile)
+
     def top_z_at(self, gx: int, gy: int) -> float:
         """Return the highest z_offset + grid_z among tiles covering (gx, gy), or 0.0."""
         best = 0.0

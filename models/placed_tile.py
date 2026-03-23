@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from typing import List, Tuple
 
@@ -7,8 +8,8 @@ from models.tile_definition import TileDefinition
 @dataclass
 class PlacedTile:
     definition: TileDefinition
-    grid_x: int
-    grid_y: int
+    grid_x: float   # may be fractional for free-placed tiles
+    grid_y: float   # may be fractional for free-placed tiles
     rotation: int        # 0, 90, 180, or 270 degrees
     z_offset: float = 0.0  # Z position in grid-cell units; set when stacking on another tile
 
@@ -28,8 +29,10 @@ class PlacedTile:
 
     def occupies(self) -> List[Tuple[int, int]]:
         """Returns all (x, y) grid cells this tile covers."""
+        x0 = math.floor(self.grid_x)
+        y0 = math.floor(self.grid_y)
         cells = []
         for dy in range(self.effective_h):
             for dx in range(self.effective_w):
-                cells.append((self.grid_x + dx, self.grid_y + dy))
+                cells.append((x0 + dx, y0 + dy))
         return cells

@@ -1,3 +1,4 @@
+import math
 import os
 from typing import Dict, List, Optional
 
@@ -394,17 +395,23 @@ class MainWindow(QMainWindow):
         self._view.setFocus()
         self._update_status()
 
-    def _on_tile_placed(self, gx: int, gy: int) -> None:
+    def _on_tile_placed(self, gx: float, gy: float) -> None:
         if self._selected_definition is None:
             return
+        from PyQt5.QtWidgets import QApplication
+        free = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+        igx, igy = int(math.floor(gx)), int(math.floor(gy))
         pt = PlacedTile(
             definition=self._selected_definition,
             grid_x=gx,
             grid_y=gy,
             rotation=self._pending_rotation,
-            z_offset=self._model.top_z_at(gx, gy),
+            z_offset=self._model.top_z_at(igx, igy),
         )
-        self._model.place(pt)
+        if free:
+            self._model.force_place(pt)
+        else:
+            self._model.place(pt)
         self._view.refresh()
         self._mark_dirty()
         self._update_status()

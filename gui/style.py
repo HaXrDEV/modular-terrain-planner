@@ -174,6 +174,26 @@ QTabBar::close-button:hover {{
     background: #d9d9d9;
 }}
 
+/* Tab bar scroll arrows (shown when tabs overflow) */
+QTabBar QToolButton {{
+    background: #f3f3f3;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 2px;
+    margin: 2px 1px;
+}}
+QTabBar QToolButton:hover {{
+    background: #e5e5e5;
+    border-color: #bdbdbd;
+}}
+QTabBar QToolButton:pressed {{
+    background: #d9d9d9;
+}}
+QTabBar QToolButton:disabled {{
+    background: transparent;
+    border-color: transparent;
+}}
+
 /* ── List widget ─────────────────────────────────────────────────────── */
 QListWidget {{
     background: #ffffff;

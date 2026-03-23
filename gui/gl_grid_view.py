@@ -158,7 +158,9 @@ class GLGridView(QOpenGLWidget):
         self._ground_vao = self._ground_vbo = self._ground_n = 0
         self._grid_vao   = self._grid_vbo   = self._grid_n   = 0
         self._ready      = False  # True after initializeGL succeeds
-        self._bg         = (0.10, 0.10, 0.12)  # void background colour
+        self._bg           = (0.10, 0.10, 0.12)  # void background colour
+        self._ground_col   = (0.22, 0.22, 0.25)  # ground plane fill
+        self._grid_col     = (0.45, 0.45, 0.50)  # grid lines
 
         # Ground image texture
         self._tex_id:   int  = 0
@@ -190,9 +192,14 @@ class GLGridView(QOpenGLWidget):
     def set_pan_speed(self, speed: float) -> None:
         self._pan_speed = speed
 
-    def set_background_color(self, r: float, g: float, b: float) -> None:
-        """Set the GL clear colour (void background). Call after GL is ready."""
+    def set_background_color(self, r: float, g: float, b: float,
+                             ground: tuple = None, grid: tuple = None) -> None:
+        """Set void background, ground plane fill, and grid line colours."""
         self._bg = (r, g, b)
+        if ground is not None:
+            self._ground_col = ground
+        if grid is not None:
+            self._grid_col = grid
         if self._ready:
             self.makeCurrent()
             glClearColor(r, g, b, 1.0)
@@ -370,7 +377,7 @@ class GLGridView(QOpenGLWidget):
         # --- Ground plane and grid lines ---
         glUseProgram(self._flat_prog)
         glUniformMatrix4fv(self._u_flat_mvp, 1, GL_FALSE, pv_arr)
-        glUniform4f(self._u_flat_col, 0.22, 0.22, 0.25, 1.0)
+        glUniform4f(self._u_flat_col, *self._ground_col, 1.0)
         glBindVertexArray(self._ground_vao)
         glDrawArrays(GL_TRIANGLES, 0, self._ground_n)
 
@@ -388,7 +395,7 @@ class GLGridView(QOpenGLWidget):
             glUseProgram(self._flat_prog)
             glUniformMatrix4fv(self._u_flat_mvp, 1, GL_FALSE, pv_arr)
 
-        glUniform4f(self._u_flat_col, 0.45, 0.45, 0.50, 1.0)
+        glUniform4f(self._u_flat_col, *self._grid_col, 1.0)
         glLineWidth(1.0)
         glBindVertexArray(self._grid_vao)
         glDrawArrays(GL_LINES, 0, self._grid_n)

@@ -808,10 +808,14 @@ class MainWindow(QMainWindow):
         self._act_theme_dark.setChecked(theme == "dark")
         # Match GL backgrounds
         if resolved == "dark":
-            r, g, b = 0x1F / 255, 0x1F / 255, 0x1F / 255
+            r, g, b   = 0x1F / 255, 0x1F / 255, 0x1F / 255
+            ground    = (0.22, 0.22, 0.25)
+            grid      = (0.45, 0.45, 0.50)
         else:
-            r, g, b = 0xF3 / 255, 0xF3 / 255, 0xF3 / 255
-        self._view.set_background_color(r, g, b)
+            r, g, b   = 0xF3 / 255, 0xF3 / 255, 0xF3 / 255
+            ground    = (0.82, 0.82, 0.84)   # slightly darker than void
+            grid      = (0.68, 0.68, 0.72)   # visible but soft
+        self._view.set_background_color(r, g, b, ground=ground, grid=grid)
         self._palette.set_preview_background(r, g, b)
 
     def _update_status(self) -> None:

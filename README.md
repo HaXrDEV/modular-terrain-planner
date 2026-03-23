@@ -4,6 +4,8 @@ A desktop tool for designing tabletop RPG dungeon layouts by placing modular ter
 
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![PyQt5](https://img.shields.io/badge/PyQt5-5.15%2B-green) ![OpenGL](https://img.shields.io/badge/OpenGL-3.3%20Core-orange)
 
+![Screenshot](docs/screenshot.png)
+
 ---
 
 ## Features

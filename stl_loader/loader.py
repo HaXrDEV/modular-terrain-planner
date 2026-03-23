@@ -36,10 +36,11 @@ def parse_bounding_box(stl_path: str) -> Tuple[float, float, float]:
     return dx, dy, dz
 
 
-# LOD grid resolutions: (LOD1, LOD2).  Larger = finer = more triangles.
-# LOD1 at 85³ is visually indistinguishable from the raw mesh at normal viewing
-# distances. LOD2 at 25³ is used only for tiles far from the camera.
-_LOD_GRIDS = (85, 25)
+# LOD grid resolutions: (LOD0, LOD1, LOD2).  Larger = finer = more triangles.
+# LOD0 at 150³ — high detail, still decimated (cells ~6.7mm on a 25mm tile).
+# LOD1 at 85³  — medium detail for mid-range distances.
+# LOD2 at 25³  — low detail for tiles far from the camera.
+_LOD_GRIDS = (150, 85, 25)
 
 
 def _decimate(verts: np.ndarray, grid: int) -> np.ndarray:

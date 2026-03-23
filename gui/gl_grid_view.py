@@ -632,7 +632,7 @@ class GLGridView(QOpenGLWidget):
 
     def _draw_tile(self, pt: PlacedTile, proj: QMatrix4x4, view: QMatrix4x4, alpha: float) -> None:
         defn = pt.definition
-        key  = (defn.stl_path, 0)   # ghost draws always use full-quality LOD 0
+        key  = (defn.stl_path, 0)   # ghost draws always use highest available LOD (150³)
 
         # Lazily build VBO if missing
         if key not in self._mesh_cache:
@@ -778,8 +778,7 @@ class GLGridView(QOpenGLWidget):
 
     def _upload_tile(self, defn: TileDefinition) -> None:
         """Upload VAOs for all LOD levels of defn."""
-        all_tris = [defn.view_triangles] + list(defn.lod_triangles)
-        for lod, tris in enumerate(all_tris):
+        for lod, tris in enumerate(defn.lod_triangles):
             if tris is None or len(tris) == 0:
                 continue
             vdata = _build_vdata(tris)
@@ -824,7 +823,7 @@ class GLGridView(QOpenGLWidget):
         self._inst_cache[(path, lod)] = (inst_vao, inst_vbo, n_verts)
 
     # LOD distance thresholds (eye-to-tile distance in grid cells)
-    _LOD_DISTS = (10.0, 80.0)   # <10 → LOD0 (full), 10-80 → LOD1 (near-original), >80 → LOD2
+    _LOD_DISTS = (10.0, 80.0)   # <10 → LOD0 (150³), 10–80 → LOD1 (85³), ≥80 → LOD2 (25³)
 
     def _lod_for_dist(self, dist: float) -> int:
         for lod, threshold in enumerate(self._LOD_DISTS):

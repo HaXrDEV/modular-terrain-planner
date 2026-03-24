@@ -2,7 +2,7 @@
 
 A desktop tool for designing tabletop RPG dungeon layouts by placing modular terrain STL tiles on a grid — like digital Lego. When you're done, export a print list as CSV so you know exactly how many of each tile to print.
 
-![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![PyQt5](https://img.shields.io/badge/PyQt5-5.15%2B-green) ![OpenGL](https://img.shields.io/badge/OpenGL-3.3%20Core-orange)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![PyQt5](https://img.shields.io/badge/PyQt5-5.15%2B-green) ![OpenGL](https://img.shields.io/badge/OpenGL-4.6%20Core-orange)
 
 ![Screenshot](docs/screenshot.png)
 
@@ -10,7 +10,7 @@ A desktop tool for designing tabletop RPG dungeon layouts by placing modular ter
 
 ## Features
 
-- **3D dungeon view** — Full OpenGL 3.3 rendering with flat shading and three-point lighting
+- **3D dungeon view** — Full OpenGL 4.6 rendering with flat shading and three-point lighting
 - **Interactive orbit camera** — Rotate, pan, and zoom around the dungeon layout
 - **Tile model previewer** — 3D preview of the selected tile in the palette; orbit and zoom independently
 - **Multi-folder tabs** — Load multiple STL folders as separate tabs and switch between them instantly
@@ -115,14 +115,29 @@ python main.py
 
 ---
 
-## Mesh Processing
+## Mesh Processing & LOD
 
-STL files for tabletop terrain often contain 100 000–450 000 triangles. The loader applies **voxel-clustering decimation** before uploading to the GPU:
+STL files for tabletop terrain often contain 100 000–450 000 triangles. The loader builds six LOD levels using **density-based voxel-clustering decimation**, and the renderer selects the right level per tile every frame based on screen coverage.
 
-1. The full mesh is loaded via `numpy-stl`
-2. Triangle centroids are quantised to a 100×100×100 spatial grid
-3. One representative triangle is kept per occupied cell
-4. This yields ~30 000–65 000 connected triangles — visually complete, GPU-friendly
+### Load-time: six LOD tiers
+
+1. The full mesh is loaded and winding is corrected against stored STL normals
+2. Actual 3D surface area (in normalised [0,1]³ space) is computed to characterise mesh density
+3. Six triangle-count targets are derived from density tiers: `50 000 → 20 000 → 8 000 → 3 000 → 800 → 150` triangles per surface-area unit
+4. For each target, **vertex-clustering decimation** (`_decimate`) merges vertices that fall in the same cell of a *grid*³ lattice and discards degenerate triangles — the surface stays watertight
+5. Sparse meshes (density < 500 tri/unit²) skip decimation entirely — they are already low-poly
+6. Triangle counts per level are stored alongside each mesh for fast LOD selection at draw time
+
+### Draw-time: screen-coverage LOD selection
+
+Rather than using camera distance, LOD is chosen per tile based on the tile's **projected pixel area**:
+
+1. The 8 corners of each tile's axis-aligned bounding box are projected to NDC in a single vectorised numpy pass
+2. Pixel area = `NDC span X × viewport width/2 × NDC span Y × viewport height/2`
+3. Triangle target = `pixel_area × 0.5` (half a triangle per pixel)
+4. The LOD tier whose actual triangle count is closest to the target is selected
+
+Large tiles close to the camera stay fully detailed; the same tile viewed from far away or at a glancing angle drops to the coarsest tier automatically. The full-resolution mesh is never uploaded — only the selected LOD level is sent to the GPU each frame.
 
 Flat per-face normals are computed from the cross product of each triangle's edges, so shading works correctly regardless of the normals stored in the STL file.
 

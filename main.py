@@ -15,9 +15,9 @@ def main() -> None:
     # Request desktop OpenGL before QApplication is created (Windows requirement).
     QApplication.setAttribute(Qt.AA_UseDesktopOpenGL)
 
-    # Set OpenGL 3.3 Core as the default format for all GL contexts/widgets.
+    # Set OpenGL 4.6 Core as the default format for all GL contexts/widgets.
     fmt = QSurfaceFormat()
-    fmt.setVersion(3, 3)
+    fmt.setVersion(4, 6)
     fmt.setProfile(QSurfaceFormat.CoreProfile)
     fmt.setDepthBufferSize(24)
     fmt.setStencilBufferSize(8)

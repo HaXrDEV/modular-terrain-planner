@@ -72,21 +72,21 @@ from gui.gl_helpers import (
 # ---------------------------------------------------------------------------
 
 _FLAT_VERT = """\
-#version 330 core
+#version 460 core
 layout(location = 0) in vec3 aPos;
 uniform mat4 uMVP;
 void main() { gl_Position = uMVP * vec4(aPos, 1.0); }
 """
 
 _FLAT_FRAG = """\
-#version 330 core
+#version 460 core
 uniform vec4 uColor;
 out vec4 FragColor;
 void main() { FragColor = uColor; }
 """
 
 _TEX_VERT = """\
-#version 330 core
+#version 460 core
 layout(location = 0) in vec3 aPos;
 uniform mat4 uMVP;
 uniform vec4 uTexRect;
@@ -99,7 +99,7 @@ void main() {
 """
 
 _TEX_FRAG = """\
-#version 330 core
+#version 460 core
 in vec2 vUV;
 uniform sampler2D uTex;
 out vec4 FragColor;
@@ -899,32 +899,27 @@ class GLGridView(QOpenGLWidget):
 
         self._inst_cache[(path, lod)] = (inst_vao, inst_vbo, n_verts)
 
-    # LOD distance thresholds (eye-to-tile distance in grid cells)
-    _LOD_DISTS = (10.0, 80.0)   # <10 → LOD0 (150³), 10–80 → LOD1 (85³), ≥80 → LOD2 (25³)
-
-    def _lod_for_dist(self, dist: float) -> int:
-        for lod, threshold in enumerate(self._LOD_DISTS):
-            if dist < threshold:
-                return lod
-        return len(self._LOD_DISTS)
+    # Screen-coverage LOD: target this many triangles per projected screen pixel.
+    # Tiles covering more pixels get more triangles; sub-pixel tiles get minimal.
+    _TRIS_PER_PIXEL = 0.5
 
     def _rebuild_instance_buffers(self) -> None:
         """Group placed tiles by (mesh, lod) and upload per-instance data to the GPU.
 
-        Frustum culling is done with a single batched numpy operation across all
-        placed tiles — one Python loop collects AABB data, then all six plane tests
-        run in one vectorised pass, producing a boolean visibility mask.  Only
-        visible tiles enter the instance groups.
+        LOD selection is screen-coverage-based (Nanite-like): each tile's AABB is
+        projected to screen space, the pixel area is computed, and the LOD tier
+        whose triangle count is closest to (pixel_area × _TRIS_PER_PIXEL) is chosen.
+        Different tiles at the same camera distance can receive different LODs —
+        a large 4×4 tile stays detailed while a distant 1×1 tile becomes coarser.
+
+        Frustum culling uses a single batched numpy operation (Gribb-Hartmann).
+        Screen projection for LOD reuses the same 8-corner AABB computation.
         """
         proj, view = self._get_proj_view()
         pv = proj * view
 
-        eye = self._eye_pos()
-        ex, ey, ez = eye.x(), eye.y(), eye.z()
-
         # Gribb-Hartmann frustum plane extraction from the PV matrix.
         # Qt data() is column-major → reshape(4,4) yields pv_np = M^T.
-        # Rows of M == columns of pv_np.
         pv_np = np.array(pv.data(), dtype=np.float64).reshape(4, 4)
         c0, c1, c2, c3 = pv_np[:, 0], pv_np[:, 1], pv_np[:, 2], pv_np[:, 3]
         planes    = np.array([c3+c0, c3-c0, c3+c1, c3-c1, c3+c2, c3-c2])  # (6,4)
@@ -958,8 +953,6 @@ class GLGridView(QOpenGLWidget):
         aabb_min = np.stack([t_gx,          t_gy,          t_gzo         ], axis=1)  # (N,3)
         aabb_max = np.stack([t_gx + t_ew,   t_gy + t_eh,   t_gzo + t_gz  ], axis=1)  # (N,3)
 
-        # For each plane choose the p-vertex (corner maximising signed distance).
-        # plane_abc[:,None,:] is (6,1,3), aabb_* are (1,N,3) via broadcasting.
         p_verts = np.where(
             plane_abc[:, np.newaxis, :] >= 0,
             aabb_max[np.newaxis, :, :],
@@ -969,18 +962,49 @@ class GLGridView(QOpenGLWidget):
                        + plane_d[:, np.newaxis]           # (6, N)
         visible_mask = np.all(signed_dists >= 0.0, axis=0)   # (N,)  True = inside frustum
 
-        # --- Vectorised LOD distance ---
-        cx   = t_gx + t_ew * 0.5
-        cy   = t_gy + t_eh * 0.5
-        cz   = t_gzo + t_gz * 0.5
-        dist = np.sqrt((cx - ex)**2 + (cy - ey)**2 + (cz - ez)**2)  # (N,)
+        # --- Vectorised screen-space pixel area for LOD selection ---
+        # Build all 8 AABB corners for all N tiles: (N, 8, 4) homogeneous
+        # Row-vector convention: clip = corner @ pv_np  (Qt col-major → pv_np = PV^T)
+        vw = max(self.width(), 1)
+        vh = max(self.height(), 1)
+        x_ends = np.stack([aabb_min[:, 0], aabb_max[:, 0]], axis=1)   # (N, 2)
+        y_ends = np.stack([aabb_min[:, 1], aabb_max[:, 1]], axis=1)   # (N, 2)
+        z_ends = np.stack([aabb_min[:, 2], aabb_max[:, 2]], axis=1)   # (N, 2)
+        xs = x_ends[:, [0, 0, 0, 0, 1, 1, 1, 1]]  # (N, 8)
+        ys = y_ends[:, [0, 0, 1, 1, 0, 0, 1, 1]]  # (N, 8)
+        zs = z_ends[:, [0, 1, 0, 1, 0, 1, 0, 1]]  # (N, 8)
+        ones8  = np.ones((n, 8), dtype=np.float64)
+        corners_h = np.stack([xs, ys, zs, ones8], axis=2)  # (N, 8, 4)
+        clip_h    = corners_h @ pv_np                       # (N, 8, 4)
+        w_vals    = clip_h[:, :, 3]                         # (N, 8)
+        pos_w     = w_vals > 1e-6                           # (N, 8)
+        safe_w    = np.where(pos_w, w_vals, 1.0)
+        ndc_x     = np.clip(clip_h[:, :, 0] / safe_w, -1.0, 1.0)  # (N, 8)
+        ndc_y     = np.clip(clip_h[:, :, 1] / safe_w, -1.0, 1.0)  # (N, 8)
+        span_x    = ndc_x.max(axis=1) - ndc_x.min(axis=1)         # (N,)
+        span_y    = ndc_y.max(axis=1) - ndc_y.min(axis=1)         # (N,)
+        # NDC span of 2.0 = full viewport width/height
+        pixel_area = np.where(
+            np.any(pos_w, axis=1),
+            (span_x * 0.5 * vw) * (span_y * 0.5 * vh),
+            0.0,
+        )   # (N,) — projected AABB pixel area per tile
 
         # --- Group visible tiles by (path, lod) ---
         groups: Dict[Tuple[str, int], list] = {}
         for i in np.where(visible_mask)[0]:
             pt   = all_placed[i]
             path = pt.definition.stl_path
-            lod  = self._lod_for_dist(float(dist[i]))
+
+            # Screen-coverage LOD: pick tier whose triangle count is closest
+            # to (pixel_area × _TRIS_PER_PIXEL).
+            tri_target   = float(pixel_area[i]) * self._TRIS_PER_PIXEL
+            tri_counts   = pt.definition.lod_tri_counts
+            if tri_counts:
+                lod = min(range(len(tri_counts)),
+                          key=lambda l: abs(tri_counts[l] - tri_target))
+            else:
+                lod = 0
 
             key = (path, lod)
             while lod > 0 and key not in self._inst_cache:

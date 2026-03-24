@@ -21,8 +21,11 @@ class TileDefinition:
         compare=False,
     )
     # Lower-resolution versions for LOD rendering.
-    # lod_triangles[0] = medium quality (LOD 1), lod_triangles[1] = low quality (LOD 2).
+    # lod_triangles[0] = highest quality LOD, lod_triangles[-1] = lowest quality LOD.
     lod_triangles: list = field(default_factory=list, compare=False)
+    # Triangle counts per LOD level, parallel to lod_triangles.
+    # Used by screen-coverage LOD selection to find the closest-match tier.
+    lod_tri_counts: list = field(default_factory=list, compare=False)
 
     @staticmethod
     def color_for_name(name: str) -> QColor:

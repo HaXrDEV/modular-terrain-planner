@@ -47,7 +47,7 @@ except ImportError:
 # where c=cos(rot), s=sin(rot), ew/eh/gz from iScale.
 
 INST_VERT = """\
-#version 330 core
+#version 460 core
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNorm;
 layout(location = 2) in vec3  iPos;
@@ -77,7 +77,7 @@ void main() {
 """
 
 INST_FRAG = """\
-#version 330 core
+#version 460 core
 in vec3 vNorm;
 in vec4 vColor;
 out vec4 FragColor;
@@ -92,7 +92,7 @@ void main() {
 """
 
 MESH_VERT = """\
-#version 330 core
+#version 460 core
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNorm;
 uniform mat4 uMVP;
@@ -108,7 +108,7 @@ void main() {
 """
 
 MESH_FRAG = """\
-#version 330 core
+#version 460 core
 in vec3 vNorm;
 uniform vec3 uColor;
 uniform float uAlpha;
@@ -124,7 +124,7 @@ void main() {
 """
 
 OUTLINE_VERT = """\
-#version 330 core
+#version 460 core
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNorm;
 uniform mat4 uMVP;
@@ -134,7 +134,7 @@ void main() {
 """
 
 OUTLINE_FRAG = """\
-#version 330 core
+#version 460 core
 uniform vec4 uColor;
 out vec4 FragColor;
 void main() {

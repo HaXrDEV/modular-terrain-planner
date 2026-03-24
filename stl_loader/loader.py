@@ -1,4 +1,5 @@
 import glob
+import math
 import os
 from typing import List, Tuple
 
@@ -36,11 +37,19 @@ def parse_bounding_box(stl_path: str) -> Tuple[float, float, float]:
     return dx, dy, dz
 
 
-# LOD grid resolutions: (LOD0, LOD1, LOD2).  Larger = finer = more triangles.
-# LOD0 at 150³ — high detail, still decimated (cells ~6.7mm on a 25mm tile).
-# LOD1 at 85³  — medium detail for mid-range distances.
-# LOD2 at 25³  — low detail for tiles far from the camera.
-_LOD_GRIDS = (150, 85, 25)
+# Target triangle density in triangles per unit of normalised 3D surface area.
+# Six tiers covering the full detail range.  Screen-coverage LOD selection
+# picks the tier whose actual triangle count is closest to
+# (pixel_area × _TRIS_PER_PIXEL) so detail scales with projected screen area.
+_LOD_DENSITY = (50_000, 20_000, 8_000, 3_000, 800, 150)
+
+# Meshes whose original density falls below this threshold are already sparse
+# and kept at full resolution for all LOD tiers — no decimation applied.
+_LOD_SKIP_DENSITY = 500
+
+# Reference grid used to calibrate per-mesh density before solving for the
+# target grid.  A mid-range value keeps the calibration pass cheap.
+_REF_GRID = 50
 
 
 def _decimate(verts: np.ndarray, grid: int) -> np.ndarray:
@@ -77,6 +86,38 @@ def _decimate(verts: np.ndarray, grid: int) -> np.ndarray:
     tri_idx = tri_idx[valid]
 
     return rep[tri_idx].astype(np.float32)                  # (M, 3, 3)
+
+
+def _decimate_to_target(verts: np.ndarray, target: int,
+                        original_density: float) -> np.ndarray:
+    """
+    Decimate *verts* to approximately *target* triangles.
+
+    Meshes whose original density is below _LOD_SKIP_DENSITY are returned
+    unchanged — they are already sparse and decimation would visibly degrade
+    them while denser meshes would still look comparatively over-detailed.
+
+    For meshes above the threshold, runs one cheap reference decimation
+    (at _REF_GRID³) then uses the surface-mesh scaling law (output ∝ grid²)
+    to estimate the grid that hits *target* and runs a second decimation.
+    """
+    if len(verts) == 0:
+        return verts
+
+    # Skip decimation for meshes that are already below the density threshold
+    if original_density < _LOD_SKIP_DENSITY:
+        return verts
+
+    ref = _decimate(verts, _REF_GRID)
+    n_ref = len(ref)
+    if n_ref == 0:
+        return ref
+
+    # Surface meshes: output ∝ grid²  →  grid_target = ref_grid × √(target/n_ref)
+    grid = max(4, min(300, round(_REF_GRID * math.sqrt(target / max(n_ref, 1)))))
+    if grid == _REF_GRID:
+        return ref
+    return _decimate(verts, grid)
 
 
 def load_tile_mesh(
@@ -161,7 +202,20 @@ def load_stl_folder(folder_path: str) -> List[TileDefinition]:
             view_triangles = load_tile_mesh(
                 stl_path, min_x, min_y, min_z, dx / scale, dy / scale, dz / scale
             )
-            lod_triangles = [_decimate(view_triangles, g) for g in _LOD_GRIDS]
+            # Actual 3D surface area of the normalised mesh (in [0,1]³ units)
+            v0 = view_triangles[:, 0]
+            v1 = view_triangles[:, 1]
+            v2 = view_triangles[:, 2]
+            surface_area = float(
+                np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1).sum() * 0.5
+            )
+            surface_area = max(surface_area, 0.01)  # guard against degenerate meshes
+            original_density = len(view_triangles) / surface_area
+            lod_triangles = [
+                _decimate_to_target(view_triangles, int(d * surface_area), original_density)
+                for d in _LOD_DENSITY
+            ]
+            lod_tri_counts = [len(t) for t in lod_triangles]
         except Exception as exc:
             print(f"[STL loader] Skipping '{name}': {exc}")
             continue
@@ -176,6 +230,7 @@ def load_stl_folder(folder_path: str) -> List[TileDefinition]:
             color=color,
             view_triangles=view_triangles,
             lod_triangles=lod_triangles,
+            lod_tri_counts=lod_tri_counts,
         ))
 
     return definitions

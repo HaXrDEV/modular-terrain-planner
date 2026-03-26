@@ -1149,8 +1149,7 @@ class GLGridView(QOpenGLWidget):
             )
         else:
             eye = self._eye_pos()
-            up = QVector3D(0.0, 0.0, 1.0) if self._elevation < 88.0 else QVector3D(0.0, 1.0, 0.0)
-            view.lookAt(eye, QVector3D(*self._target), up)
+            view.lookAt(eye, QVector3D(*self._target), QVector3D(0.0, 0.0, 1.0))
 
             if self._ortho_proj:
                 # Orthographic projection matched to the 45° FOV frustum at _distance.

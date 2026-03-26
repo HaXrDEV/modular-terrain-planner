@@ -901,7 +901,7 @@ class GLGridView(QOpenGLWidget):
 
     # Screen-coverage LOD: target this many triangles per projected screen pixel.
     # Tiles covering more pixels get more triangles; sub-pixel tiles get minimal.
-    _TRIS_PER_PIXEL = 0.5
+    _TRIS_PER_PIXEL = 2.0
 
     def _rebuild_instance_buffers(self) -> None:
         """Group placed tiles by (mesh, lod) and upload per-instance data to the GPU.

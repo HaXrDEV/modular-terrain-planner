@@ -41,11 +41,14 @@ def parse_bounding_box(stl_path: str) -> Tuple[float, float, float]:
 # Six tiers covering the full detail range.  Screen-coverage LOD selection
 # picks the tier whose actual triangle count is closest to
 # (pixel_area × _TRIS_PER_PIXEL) so detail scales with projected screen area.
-_LOD_DENSITY = (50_000, 20_000, 8_000, 3_000, 800, 150)
+_LOD_DENSITY = (50_000, 20_000, 8_000, 4_000, 2_500, 1_500)
 
-# Meshes whose original density falls below this threshold are already sparse
-# and kept at full resolution for all LOD tiers — no decimation applied.
-_LOD_SKIP_DENSITY = 500
+# A mesh is only decimated for a given tier if its original density is at least
+# this many times higher than that tier's target density.  Coarser tiers
+# therefore require proportionally more source detail — low-quality meshes
+# naturally fall through to their full resolution for all tiers where they
+# don't meet the headroom requirement.
+_LOD_QUALITY_HEADROOM = 5
 
 # Reference grid used to calibrate per-mesh density before solving for the
 # target grid.  A mid-range value keeps the calibration pass cheap.
@@ -89,23 +92,27 @@ def _decimate(verts: np.ndarray, grid: int) -> np.ndarray:
 
 
 def _decimate_to_target(verts: np.ndarray, target: int,
-                        original_density: float) -> np.ndarray:
+                        original_density: float,
+                        tier_density: float) -> np.ndarray:
     """
     Decimate *verts* to approximately *target* triangles.
 
-    Meshes whose original density is below _LOD_SKIP_DENSITY are returned
-    unchanged — they are already sparse and decimation would visibly degrade
-    them while denser meshes would still look comparatively over-detailed.
+    Decimation is skipped unless the mesh's original density is at least
+    _LOD_QUALITY_HEADROOM× the tier's target density.  This means coarser
+    tiers require proportionally more source detail — low-quality meshes
+    are returned unchanged for any tier where they lack sufficient headroom,
+    keeping their full (if limited) geometry rather than degrading further.
 
-    For meshes above the threshold, runs one cheap reference decimation
+    For meshes that do qualify, runs one cheap reference decimation
     (at _REF_GRID³) then uses the surface-mesh scaling law (output ∝ grid²)
     to estimate the grid that hits *target* and runs a second decimation.
     """
     if len(verts) == 0:
         return verts
 
-    # Skip decimation for meshes that are already below the density threshold
-    if original_density < _LOD_SKIP_DENSITY:
+    # Skip decimation if the mesh doesn't have enough density headroom over
+    # this tier's target — protects low-quality meshes from over-reduction.
+    if original_density < tier_density * _LOD_QUALITY_HEADROOM:
         return verts
 
     ref = _decimate(verts, _REF_GRID)
@@ -212,7 +219,7 @@ def load_stl_folder(folder_path: str) -> List[TileDefinition]:
             surface_area = max(surface_area, 0.01)  # guard against degenerate meshes
             original_density = len(view_triangles) / surface_area
             lod_triangles = [
-                _decimate_to_target(view_triangles, int(d * surface_area), original_density)
+                _decimate_to_target(view_triangles, int(d * surface_area), original_density, d)
                 for d in _LOD_DENSITY
             ]
             lod_tri_counts = [len(t) for t in lod_triangles]

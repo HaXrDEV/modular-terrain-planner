@@ -10,42 +10,33 @@ A desktop tool for designing tabletop RPG dungeon layouts by placing modular ter
 
 ## Features
 
-- **3D dungeon view** — Full OpenGL 4.6 rendering with flat shading and three-point lighting
-- **Interactive orbit camera** — Rotate, pan, and zoom around the dungeon layout
-- **Tile model previewer** — 3D preview of the selected tile in the palette; orbit and zoom independently
-- **Multi-folder tabs** — Load multiple STL folders as separate tabs and switch between them instantly
-- **Auto-detect tile size** — Reads bounding boxes from STL files and maps them to grid cells (1 cell = 25 mm)
-- **Snap-to-grid placement** — Left-click to place, right-click to remove; pending tile centers on cursor
-- **Ghost preview** — Hover to see where a tile will land before placing it
-- **Tile rotation** — Press R to rotate the pending tile 90°; rotation pivots around the cursor
-- **Select & move** — When no tile is selected in the palette, left-click/drag to select placed tiles and reposition them; Shift-click to add to the selection; drag a box over empty space for rubber-band multi-select
-- **Battle map overlay** — Load any image (PNG/JPG/BMP) as a ground-plane texture; position and scale it to match the grid
-- **Print list export** — Export tile counts to CSV for your slicer/print queue
-- **Inches heuristic** — Automatically detects and converts inch-unit STL files (e.g. OpenForge tiles)
+- **3D grid layout** — Place modular STL tiles on a snap-to-grid canvas with a live ghost preview and orbit/top-down camera
+- **Automatic tile sizing** — Bounding boxes are read directly from each STL file and mapped to grid cells (1 cell = 25 mm); inch-unit files (e.g. OpenForge) are detected and converted automatically
+- **Select, move & copy** — Click, rubber-band, or Shift-click to select tiles; drag to reposition, Ctrl+C/V to duplicate
+- **Battle map overlay** — Drop any image onto the ground plane and align it to the grid
+- **Print list export** — Export a tile-count CSV straight to your slicer queue
 
 ---
 
-## Requirements
+## Getting Started
 
-- Python 3.9 or newer
-- Windows (tested), should work on Linux/macOS with minor path adjustments
+### Portable EXE (easiest)
 
-Dependencies are installed automatically by `launch.bat`:
+Download `DungeonDesigner.exe` from the [latest release](../../releases/latest) — no Python or dependencies required. Windows may show a SmartScreen warning on first run; click *More info → Run anyway*.
 
-```
+### From source
+
+Requires Python 3.9+ and the following dependencies (installed automatically by `launch.bat`):
+
+```text
 PyQt5 >= 5.15
 numpy-stl >= 3.0
 numpy >= 1.24
 PyOpenGL >= 3.1
 ```
 
----
+**Windows** — double-click **`launch.bat`**. It will:
 
-## Getting Started
-
-### Windows (recommended)
-
-Double-click **`launch.bat`**. It will:
 1. Create a `.venv` virtual environment if one doesn't exist
 2. Install all dependencies into it
 3. Launch the application
@@ -84,6 +75,7 @@ python main.py
    - **Middle-drag** — Pan
    - **Scroll wheel** — Zoom in / out
    - **Home** — Reset camera to default position
+   - **5** — Toggle top-down orthographic mode (perspective-less overhead view; right-drag and WASD pan, scroll zooms)
 9. **Manage folders** — Click the × on a tab to unload that folder. Tiles already placed on the grid remain.
 10. **Battle map overlay** — Go to *Edit → Set Ground Image…*, pick an image file, then set its X/Y offset and width/height in grid cells so it lines up with your tile grid. Use *Edit → Clear Ground Image* to remove it.
 11. **Export** — Click *Export CSV* to save a print list with tile names and quantities.
@@ -92,7 +84,7 @@ python main.py
 
 ## Project Structure
 
-```
+```text
 .
 ├── main.py                  # Entry point, sets up OpenGL surface format
 ├── launch.bat               # Windows launcher (venv + dependency bootstrap)
@@ -115,31 +107,9 @@ python main.py
 
 ---
 
-## Mesh Processing & LOD
+## Documentation
 
-STL files for tabletop terrain often contain 100 000–450 000 triangles. The loader builds six LOD levels using **density-based voxel-clustering decimation**, and the renderer selects the right level per tile every frame based on screen coverage.
-
-### Load-time: six LOD tiers
-
-1. The full mesh is loaded and winding is corrected against stored STL normals
-2. Actual 3D surface area (in normalised [0,1]³ space) is computed to characterise mesh density
-3. Six triangle-count targets are derived from density tiers: `50 000 → 20 000 → 8 000 → 3 000 → 800 → 150` triangles per surface-area unit
-4. For each target, **vertex-clustering decimation** (`_decimate`) merges vertices that fall in the same cell of a *grid*³ lattice and discards degenerate triangles — the surface stays watertight
-5. Sparse meshes (density < 500 tri/unit²) skip decimation entirely — they are already low-poly
-6. Triangle counts per level are stored alongside each mesh for fast LOD selection at draw time
-
-### Draw-time: screen-coverage LOD selection
-
-Rather than using camera distance, LOD is chosen per tile based on the tile's **projected pixel area**:
-
-1. The 8 corners of each tile's axis-aligned bounding box are projected to NDC in a single vectorised numpy pass
-2. Pixel area = `NDC span X × viewport width/2 × NDC span Y × viewport height/2`
-3. Triangle target = `pixel_area × 0.5` (half a triangle per pixel)
-4. The LOD tier whose actual triangle count is closest to the target is selected
-
-Large tiles close to the camera stay fully detailed; the same tile viewed from far away or at a glancing angle drops to the coarsest tier automatically. The full-resolution mesh is never uploaded — only the selected LOD level is sent to the GPU each frame.
-
-Flat per-face normals are computed from the cross product of each triangle's edges, so shading works correctly regardless of the normals stored in the STL file.
+- [Mesh Processing & LOD](docs/mesh-processing.md) — how STL files are decimated into LOD tiers and how screen-coverage LOD selection works
 
 ---
 

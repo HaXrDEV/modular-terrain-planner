@@ -20,6 +20,7 @@ from persistence.settings import AppSettings
 from persistence.project import save_project, load_project
 from gui.gl_grid_view import GLGridView
 from gui.palette_panel import PalettePanel
+from gui.missing_folders_dialog import MissingFoldersDialog
 
 _FILTER = "Modular Terrain Planner project (*.mtp);;All files (*)"
 
@@ -319,19 +320,34 @@ class MainWindow(QMainWindow):
         self._model.GRID_ROWS = grid_rows
         self._view.rebuild_grid_geometry()
 
-        missing_folders = []
-        for folder in folders:
+        missing_folders = [f for f in folders if not os.path.isdir(f)]
+        present_folders  = [f for f in folders if     os.path.isdir(f)]
+
+        # Offer folder remapping before loading anything
+        remapping: dict = {}
+        if missing_folders:
+            dlg = MissingFoldersDialog(missing_folders, parent=self)
+            if dlg.exec_() == QDialog.Accepted:
+                remapping = dlg.remapping()
+
+        still_missing = [f for f in missing_folders if f not in remapping]
+
+        resolved = present_folders + [remapping.get(f, f) for f in missing_folders]
+        for folder in resolved:
             if os.path.isdir(folder):
                 self._load_folder_silent(folder)
                 self._settings.add_folder(folder)
-            else:
-                missing_folders.append(folder)
 
-        skipped = 0
+        missing_tiles: list = []
         for rec in tile_records:
-            defn = self._all_definitions.get(rec["stl_path"])
+            stl_path = rec["stl_path"]
+            for old, new in remapping.items():
+                if stl_path.startswith(old):
+                    stl_path = new + stl_path[len(old):]
+                    break
+            defn = self._all_definitions.get(stl_path)
             if defn is None:
-                skipped += 1
+                missing_tiles.append(stl_path)
                 continue
             pt = PlacedTile(
                 definition=defn,
@@ -357,11 +373,23 @@ class MainWindow(QMainWindow):
             self._img_toolbar.hide()
 
         warnings = []
-        if missing_folders:
-            warnings.append(f"Folders not found ({len(missing_folders)}):\n" +
-                            "\n".join(f"  {f}" for f in missing_folders))
-        if skipped:
-            warnings.append(f"{skipped} tile(s) could not be placed (STL not found).")
+        if still_missing:
+            warnings.append(
+                f"{len(still_missing)} folder(s) skipped:\n" +
+                "\n".join(f"  {f}" for f in still_missing)
+            )
+        if missing_tiles:
+            by_folder: dict = {}
+            for p in missing_tiles:
+                by_folder.setdefault(os.path.dirname(p), []).append(os.path.basename(p))
+            lines = []
+            for folder, names in by_folder.items():
+                lines.append(f"  {folder}/")
+                lines.extend(f"    \u2022 {n}" for n in names)
+            warnings.append(
+                f"{len(missing_tiles)} tile(s) could not be placed "
+                f"(STL file not found):\n" + "\n".join(lines)
+            )
         if warnings:
             QMessageBox.warning(self, "Project loaded with issues", "\n\n".join(warnings))
 

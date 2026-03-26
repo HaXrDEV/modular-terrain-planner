@@ -236,13 +236,35 @@ class MainWindow(QMainWindow):
         self._act_theme_light.triggered.connect(lambda: self._apply_theme("light"))
         self._act_theme_dark.triggered.connect(lambda: self._apply_theme("dark"))
 
+        view_menu.addSeparator()
+
+        self._act_ortho = QAction("&Top-down (Orthographic)", self)
+        self._act_ortho.setCheckable(True)
+        self._act_ortho.setShortcut("5")
+        self._act_ortho.triggered.connect(self._on_toggle_ortho)
+        view_menu.addAction(self._act_ortho)
+
         # Debug menu
         debug_menu = mb.addMenu("&Debug")
+
+        self._act_ortho_proj = QAction("&Orthographic projection (normal camera)", self)
+        self._act_ortho_proj.setCheckable(True)
+        self._act_ortho_proj.triggered.connect(self._on_toggle_ortho_proj)
+        debug_menu.addAction(self._act_ortho_proj)
+
+        debug_menu.addSeparator()
 
         self._act_disable_lod = QAction("&Disable LOD (force full detail)", self)
         self._act_disable_lod.setCheckable(True)
         self._act_disable_lod.triggered.connect(self._on_toggle_lod)
         debug_menu.addAction(self._act_disable_lod)
+
+    def _on_toggle_ortho(self, checked: bool) -> None:
+        self._view.set_ortho_mode(checked)
+
+    def _on_toggle_ortho_proj(self, checked: bool) -> None:
+        self._view._ortho_proj = checked
+        self._view.update()
 
     def _on_toggle_lod(self, checked: bool) -> None:
         self._view.lod_disabled = checked

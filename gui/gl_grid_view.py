@@ -194,6 +194,8 @@ class GLGridView(QOpenGLWidget):
         self._azimuth  = self._DEFAULT_AZ
         self._elevation= self._DEFAULT_EL
         self._distance = self._DEFAULT_DIST
+        self._ortho_mode = False
+        self._ortho_proj = False   # debug: ortho projection with normal orbit camera
 
         # Interaction
         self._last_mouse: Optional[QPoint] = None
@@ -1087,14 +1089,39 @@ class GLGridView(QOpenGLWidget):
     def _get_proj_view(self) -> Tuple[QMatrix4x4, QMatrix4x4]:
         w, h = max(self.width(), 1), max(self.height(), 1)
         proj = QMatrix4x4()
-        proj.perspective(45.0, w / h, 0.05, 500.0)
-
         view = QMatrix4x4()
-        eye = self._eye_pos()
-        # Use world up = (0,0,1), fall back to (0,1,0) at extreme elevation
-        up = QVector3D(0.0, 0.0, 1.0) if self._elevation < 88.0 else QVector3D(0.0, 1.0, 0.0)
-        view.lookAt(eye, QVector3D(*self._target), up)
+
+        if self._ortho_mode:
+            # _distance doubles as the ortho half-height so scroll zoom works unchanged.
+            half_h = max(self._distance, 0.1)
+            half_w = half_h * (w / h)
+            proj.ortho(-half_w, half_w, -half_h, half_h, -500.0, 500.0)
+            tx, ty, tz = self._target
+            view.lookAt(
+                QVector3D(tx, ty, tz + 100.0),
+                QVector3D(tx, ty, tz),
+                QVector3D(0.0, 1.0, 0.0),   # world Y points up on screen
+            )
+        else:
+            eye = self._eye_pos()
+            up = QVector3D(0.0, 0.0, 1.0) if self._elevation < 88.0 else QVector3D(0.0, 1.0, 0.0)
+            view.lookAt(eye, QVector3D(*self._target), up)
+
+            if self._ortho_proj:
+                # Orthographic projection matched to the 45° FOV frustum at _distance.
+                # half_h = distance × tan(FOV/2) keeps apparent object size consistent
+                # with the perspective view when toggling.
+                half_h = self._distance * math.tan(math.radians(22.5))
+                half_w = half_h * (w / h)
+                proj.ortho(-half_w, half_w, -half_h, half_h, -500.0, 500.0)
+            else:
+                proj.perspective(45.0, w / h, 0.05, 500.0)
+
         return proj, view
+
+    def set_ortho_mode(self, enabled: bool) -> None:
+        self._ortho_mode = enabled
+        self.update()
 
     def _reset_camera(self) -> None:
         cx = self._model.GRID_COLS / 2.0
@@ -1376,23 +1403,33 @@ class GLGridView(QOpenGLWidget):
         self._last_mouse = event.pos()
 
         if self._drag_button == Qt.RightButton and (abs(dx) > 0 or abs(dy) > 0):
-            # Orbit
-            self._azimuth  -= dx * 0.4
-            self._elevation = max(5.0, min(88.0, self._elevation + dy * 0.4))
+            if self._ortho_mode:
+                # Orbit is meaningless top-down; right-drag pans instead.
+                s = self._distance * 2.0 / max(self.height(), 1)
+                self._target[0] -= dx * s
+                self._target[1] += dy * s
+            else:
+                self._azimuth  -= dx * 0.4
+                self._elevation = max(5.0, min(88.0, self._elevation + dy * 0.4))
             self.update()
         elif self._drag_button == Qt.MiddleButton:
-            # Pan: move target in the ground plane
-            _, view = self._get_proj_view()
-            # Right vector from view matrix (row 0)
-            right = QVector3D(view.row(0))
-            fwd_flat = QVector3D(
-                -math.cos(math.radians(self._elevation)) * math.cos(math.radians(self._azimuth)),
-                -math.cos(math.radians(self._elevation)) * math.sin(math.radians(self._azimuth)),
-                0.0,
-            )
-            pan_speed = self._distance * 0.0015
-            self._target[0] += (-right.x() * dx + fwd_flat.x() * dy) * pan_speed
-            self._target[1] += (-right.y() * dx + fwd_flat.y() * dy) * pan_speed
+            if self._ortho_mode:
+                # fwd_flat collapses to zero at 90° elevation; use direct pixel mapping.
+                s = self._distance * 2.0 / max(self.height(), 1)
+                self._target[0] -= dx * s
+                self._target[1] += dy * s
+            else:
+                # Pan: move target in the ground plane
+                _, view = self._get_proj_view()
+                right = QVector3D(view.row(0))
+                fwd_flat = QVector3D(
+                    -math.cos(math.radians(self._elevation)) * math.cos(math.radians(self._azimuth)),
+                    -math.cos(math.radians(self._elevation)) * math.sin(math.radians(self._azimuth)),
+                    0.0,
+                )
+                pan_speed = self._distance * 0.0015
+                self._target[0] += (-right.x() * dx + fwd_flat.x() * dy) * pan_speed
+                self._target[1] += (-right.y() * dx + fwd_flat.y() * dy) * pan_speed
             self.update()
         elif self._img_dragging and self._img_drag_start_world is not None:
             world = self._ray_to_world(event.x(), event.y(), 0.0)
@@ -1571,23 +1608,32 @@ class GLGridView(QOpenGLWidget):
 
     def _on_pan_tick(self) -> None:
         """Called at ~60 fps while any WASD key is held; pans the camera target."""
-        az      = math.radians(self._azimuth)
-        speed   = self._distance * self._pan_speed
-        right_x, right_y =  math.sin(az), -math.cos(az)
-        fwd_x,   fwd_y   = -math.cos(az), -math.sin(az)
+        speed = self._distance * self._pan_speed
 
-        if Qt.Key_W in self._pan_keys:
-            self._target[0] += fwd_x * speed
-            self._target[1] += fwd_y * speed
-        if Qt.Key_S in self._pan_keys:
-            self._target[0] -= fwd_x * speed
-            self._target[1] -= fwd_y * speed
-        if Qt.Key_A in self._pan_keys:
-            self._target[0] += right_x * speed
-            self._target[1] += right_y * speed
-        if Qt.Key_D in self._pan_keys:
-            self._target[0] -= right_x * speed
-            self._target[1] -= right_y * speed
+        if self._ortho_mode:
+            # Fixed world-axis movement aligned to screen in top-down view.
+            if Qt.Key_W in self._pan_keys: self._target[1] += speed
+            if Qt.Key_S in self._pan_keys: self._target[1] -= speed
+            if Qt.Key_A in self._pan_keys: self._target[0] -= speed
+            if Qt.Key_D in self._pan_keys: self._target[0] += speed
+        else:
+            az      = math.radians(self._azimuth)
+            right_x, right_y =  math.sin(az), -math.cos(az)
+            fwd_x,   fwd_y   = -math.cos(az), -math.sin(az)
+
+            if Qt.Key_W in self._pan_keys:
+                self._target[0] += fwd_x * speed
+                self._target[1] += fwd_y * speed
+            if Qt.Key_S in self._pan_keys:
+                self._target[0] -= fwd_x * speed
+                self._target[1] -= fwd_y * speed
+            if Qt.Key_A in self._pan_keys:
+                self._target[0] += right_x * speed
+                self._target[1] += right_y * speed
+            if Qt.Key_D in self._pan_keys:
+                self._target[0] -= right_x * speed
+                self._target[1] -= right_y * speed
+
         self.update()
 
     # ------------------------------------------------------------------

@@ -128,8 +128,11 @@ OUTLINE_VERT = """\
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNorm;
 uniform mat4 uMVP;
+uniform vec2 uNDCOffset;
 void main() {
-    gl_Position = uMVP * vec4(aPos, 1.0);
+    vec4 pos = uMVP * vec4(aPos, 1.0);
+    pos.xy += uNDCOffset * pos.w;
+    gl_Position = pos;
 }
 """
 

@@ -30,9 +30,8 @@ try:
         GL_BACK, GL_FRONT, GL_CULL_FACE,
         GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST, GL_DYNAMIC_DRAW, GL_FALSE, GL_FLOAT,
         GL_STENCIL_BUFFER_BIT, GL_STENCIL_TEST,
-        GL_ALWAYS, GL_NOTEQUAL, GL_KEEP, GL_REPLACE, GL_TRUE,
-        GL_POLYGON_OFFSET_FILL,
-        glColorMask, glPolygonOffset, glStencilFunc, glStencilOp,
+        GL_ALWAYS, GL_EQUAL, GL_NOTEQUAL, GL_KEEP, GL_REPLACE, GL_TRUE,
+        glColorMask, glStencilFunc, glStencilOp,
         GL_FRAGMENT_SHADER, GL_LINE_LOOP, GL_LINES, GL_LINK_STATUS, GL_STATIC_DRAW,
         GL_TRIANGLES, GL_VERTEX_SHADER, GL_BLEND, GL_SRC_ALPHA,
         GL_ONE_MINUS_SRC_ALPHA,
@@ -46,7 +45,7 @@ try:
         glEnableVertexAttribArray,
         glGenBuffers, glGenVertexArrays, glGetProgramInfoLog, glGetProgramiv,
         glGetShaderInfoLog, glGetShaderiv, glGetUniformLocation, glLinkProgram,
-        glLineWidth, glShaderSource, glUniform1f, glUniform1i, glUniform3f,
+        glLineWidth, glShaderSource, glUniform1f, glUniform1i, glUniform2f, glUniform3f,
         glUniform4f, glUniformMatrix4fv, glUseProgram, glVertexAttribDivisor,
         glVertexAttribPointer,
         glViewport, glGenTextures, glBindTexture, glTexImage2D, glTexParameteri,
@@ -443,8 +442,9 @@ class GLGridView(QOpenGLWidget):
             self._u_rotz  = glGetUniformLocation(p, b"uRotZ")
 
             # Uniform locations — outline
-            self._u_outline_mvp   = glGetUniformLocation(self._outline_prog, b"uMVP")
-            self._u_outline_color = glGetUniformLocation(self._outline_prog, b"uColor")
+            self._u_outline_mvp    = glGetUniformLocation(self._outline_prog, b"uMVP")
+            self._u_outline_color  = glGetUniformLocation(self._outline_prog, b"uColor")
+            self._u_outline_offset = glGetUniformLocation(self._outline_prog, b"uNDCOffset")
 
             # Uniform locations — instanced
             self._u_inst_pv = glGetUniformLocation(self._inst_prog, b"uPV")
@@ -466,6 +466,21 @@ class GLGridView(QOpenGLWidget):
             glClearColor(*self._bg, 1.0)
 
             self._build_static_geometry()
+
+            # Fullscreen quad VAO — used to colour stencil=1 ring in the outline pass.
+            # Vertices are in NDC so an identity MVP maps them directly to clip space.
+            _quad = np.array([
+                -1.0, -1.0, 0.0,   1.0, -1.0, 0.0,   1.0,  1.0, 0.0,
+                -1.0, -1.0, 0.0,   1.0,  1.0, 0.0,  -1.0,  1.0, 0.0,
+            ], dtype=np.float32)
+            self._quad_vao = int(glGenVertexArrays(1))
+            self._quad_vbo = int(glGenBuffers(1))
+            glBindVertexArray(self._quad_vao)
+            glBindBuffer(GL_ARRAY_BUFFER, self._quad_vbo)
+            glBufferData(GL_ARRAY_BUFFER, _quad.nbytes, _quad, GL_STATIC_DRAW)
+            glEnableVertexAttribArray(0)
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
+            glBindVertexArray(0)
 
             # Scratch VAO for selection highlight quads (updated each frame)
             self._sel_vao = int(glGenVertexArrays(1))
@@ -544,38 +559,76 @@ class GLGridView(QOpenGLWidget):
             glDrawArraysInstanced(GL_TRIANGLES, 0, n_verts, count)
         glBindVertexArray(0)
 
-        # --- Selection outline (stencil + back-face extrusion) ---
-        # Drawn AFTER all instanced tiles so the depth buffer is fully populated.
-        # The outline is correctly occluded by any tile in front of the selected tile.
-        # Pass 1: stamp stencil=1 where the selected tile is visible.  Polygon
-        #         offset pushes the stencil mesh slightly toward the camera so it
-        #         reliably passes the depth test against the already-drawn surface.
-        # Pass 2: draw enlarged shell (front-faces culled) only where stencil==0.
+        # --- Selection outline (screen-space stencil dilation) ---
+        # Back-face extrusion fails for concave models (doorways, arches) because it
+        # only produces outlines at silhouette edges.  Instead we dilate the tile's
+        # stencil mask by N pixels using 8 screen-space NDC offsets:
+        #
+        #   Pass 1 — draw tile mesh 8× (offset in 8 directions), depth test OFF
+        #            → stencil = 1 over the full dilated 2-D silhouette.
+        #   Pass 2 — draw tile mesh at exact position, depth test OFF
+        #            → stencil = 2 over the full interior, leaving stencil = 1
+        #            only on the N-pixel border ring.
+        #   Pass 3 — draw tile mesh at exact position, depth test ON, stencil == 1
+        #            → colours only the ring at the tile's natural depth so the
+        #            outline appears behind the tile surface rather than over it.
+        #
+        # Depth test is deliberately OFF in passes 1 & 2 so the stencil masks are
+        # based purely on the 2-D projected silhouette.  Any depth fighting between
+        # the outline mesh (LOD 0) and the rendered tile (potentially a higher LOD)
+        # would leave interior pixels with stencil=1 and cause blue flickering on
+        # the tile surface — disabling depth eliminates that entirely.
         if self._selection:
-            glEnable(GL_STENCIL_TEST)
-            glUseProgram(self._outline_prog)
-            glDepthMask(GL_FALSE)
+            vw = max(self.width(), 1)
+            vh = max(self.height(), 1)
+            px = 3                              # outline thickness in pixels
+            sx = 2.0 * px / vw
+            sy = 2.0 * px / vh
+            _offsets = [
+                ( sx,  0.0), (-sx,  0.0), (0.0,  sy), (0.0, -sy),
+                ( sx,  sy),  ( sx, -sy),  (-sx,  sy), (-sx, -sy),
+            ]
 
-            # Pass 1 — write stencil, suppress colour
-            glEnable(GL_POLYGON_OFFSET_FILL)
-            glPolygonOffset(-1.0, -1.0)
+            glEnable(GL_STENCIL_TEST)
+            glDisable(GL_CULL_FACE)
+            glDisable(GL_DEPTH_TEST)
+            glDepthMask(GL_FALSE)
+            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE)
+            glUseProgram(self._outline_prog)
+
+            # Pass 1 — 8-direction dilation → stencil = 1
             glStencilFunc(GL_ALWAYS, 1, 0xFF)
             glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE)
-            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE)
+            for ox, oy in _offsets:
+                glUniform2f(self._u_outline_offset, ox, oy)
+                for pt in self._selection:
+                    self._draw_tile_outline(pt, proj, view)
+
+            # Pass 2 — exact position → stencil = 2 (clears interior)
+            glStencilFunc(GL_ALWAYS, 2, 0xFF)
+            glUniform2f(self._u_outline_offset, 0.0, 0.0)
             for pt in self._selection:
-                self._draw_tile_outline(pt, proj, view, scale=1.0)
+                self._draw_tile_outline(pt, proj, view)
+
+            # Pass 3 — colour the ring (stencil == 1) with a fullscreen quad.
+            # Depth test stays OFF: the ring pixels are just outside the tile edge
+            # so the tile mesh at exact position doesn't cover them — only a full-
+            # viewport draw reliably reaches every ring pixel.  The stencil=2
+            # interior mask (set reliably above without depth fighting) ensures the
+            # colour never appears on the tile surface itself.
             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE)
-            glDisable(GL_POLYGON_OFFSET_FILL)
-
-            # Pass 2 — draw outline only where stencil == 0
-            glStencilFunc(GL_NOTEQUAL, 1, 0xFF)
+            glStencilFunc(GL_EQUAL, 1, 0xFF)
             glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP)
-            glCullFace(GL_FRONT)
-            glUniform4f(self._u_outline_color, 0.0, 0.47, 0.83, 1.0)  # #0078D4
-            for pt in self._selection:
-                self._draw_tile_outline(pt, proj, view, scale=1.04)
-            glCullFace(GL_BACK)
+            glUseProgram(self._flat_prog)
+            glUniformMatrix4fv(self._u_flat_mvp, 1, GL_FALSE,
+                               np.eye(4, dtype=np.float32))
+            glUniform4f(self._u_flat_col, 0.0, 0.47, 0.83, 1.0)  # #0078D4
+            glBindVertexArray(self._quad_vao)
+            glDrawArrays(GL_TRIANGLES, 0, 6)
+            glBindVertexArray(0)
 
+            glEnable(GL_DEPTH_TEST)
+            glEnable(GL_CULL_FACE)
             glDepthMask(GL_TRUE)
             glDisable(GL_STENCIL_TEST)
 
@@ -715,12 +768,13 @@ class GLGridView(QOpenGLWidget):
         glDrawArrays(GL_TRIANGLES, 0, n_verts)
         glBindVertexArray(0)
 
-    def _draw_tile_outline(self, pt: PlacedTile, proj: QMatrix4x4, view: QMatrix4x4,
-                           scale: float = 1.04) -> None:
-        """Draw a solid-colour back-face shell slightly larger than the tile mesh.
+    def _draw_tile_outline(self, pt: PlacedTile, proj: QMatrix4x4,
+                           view: QMatrix4x4) -> None:
+        """Draw the tile mesh into the stencil buffer at its exact world position.
 
-        With GL_CULL_FACE set to GL_FRONT the enlarged back-faces that extend
-        beyond the original surface form a clean 3D outline.
+        The caller sets uNDCOffset before each directional pass so the vertex
+        shader displaces the projected vertices in screen space without touching
+        world or model coordinates.
         """
         defn = pt.definition
         key  = (defn.stl_path, 0)
@@ -728,18 +782,9 @@ class GLGridView(QOpenGLWidget):
             return
         vao, _vbo, n_verts = self._mesh_cache[key]
 
-        ew = float(pt.effective_w) * scale
-        eh = float(pt.effective_h) * scale
-        gz = float(defn.grid_z)    * scale
-
-        # Shift origin so the enlarged tile stays centred on the original
-        gx    = float(pt.grid_x)   - float(pt.effective_w) * (scale - 1) * 0.5
-        gy    = float(pt.grid_y)   - float(pt.effective_h) * (scale - 1) * 0.5
-        gz_o  = pt.z_offset        - float(defn.grid_z)    * (scale - 1) * 0.5
-
         model = QMatrix4x4()
-        model.translate(gx, gy, gz_o)
-        model.scale(ew, eh, gz)
+        model.translate(float(pt.grid_x), float(pt.grid_y), pt.z_offset)
+        model.scale(float(pt.effective_w), float(pt.effective_h), float(defn.grid_z))
         if pt.rotation != 0:
             model.translate(0.5, 0.5, 0.0)
             model.rotate(float(pt.rotation), 0.0, 0.0, 1.0)

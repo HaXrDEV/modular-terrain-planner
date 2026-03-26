@@ -903,6 +903,10 @@ class GLGridView(QOpenGLWidget):
     # Tiles covering more pixels get more triangles; sub-pixel tiles get minimal.
     _TRIS_PER_PIXEL = 2.0
 
+    # Debug flag: when True all tiles render at LOD 0 (full detail) regardless
+    # of screen coverage.  Toggle via the Debug menu in the main window.
+    lod_disabled: bool = False
+
     def _rebuild_instance_buffers(self) -> None:
         """Group placed tiles by (mesh, lod) and upload per-instance data to the GPU.
 
@@ -997,14 +1001,17 @@ class GLGridView(QOpenGLWidget):
             path = pt.definition.stl_path
 
             # Screen-coverage LOD: pick tier whose triangle count is closest
-            # to (pixel_area × _TRIS_PER_PIXEL).
-            tri_target   = float(pixel_area[i]) * self._TRIS_PER_PIXEL
-            tri_counts   = pt.definition.lod_tri_counts
-            if tri_counts:
-                lod = min(range(len(tri_counts)),
-                          key=lambda l: abs(tri_counts[l] - tri_target))
-            else:
+            # to (pixel_area × _TRIS_PER_PIXEL).  Bypassed when lod_disabled.
+            if self.lod_disabled:
                 lod = 0
+            else:
+                tri_target = float(pixel_area[i]) * self._TRIS_PER_PIXEL
+                tri_counts = pt.definition.lod_tri_counts
+                if tri_counts:
+                    lod = min(range(len(tri_counts)),
+                              key=lambda l: abs(tri_counts[l] - tri_target))
+                else:
+                    lod = 0
 
             key = (path, lod)
             while lod > 0 and key not in self._inst_cache:

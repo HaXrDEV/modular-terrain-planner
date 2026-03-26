@@ -236,6 +236,18 @@ class MainWindow(QMainWindow):
         self._act_theme_light.triggered.connect(lambda: self._apply_theme("light"))
         self._act_theme_dark.triggered.connect(lambda: self._apply_theme("dark"))
 
+        # Debug menu
+        debug_menu = mb.addMenu("&Debug")
+
+        self._act_disable_lod = QAction("&Disable LOD (force full detail)", self)
+        self._act_disable_lod.setCheckable(True)
+        self._act_disable_lod.triggered.connect(self._on_toggle_lod)
+        debug_menu.addAction(self._act_disable_lod)
+
+    def _on_toggle_lod(self, checked: bool) -> None:
+        self._view.lod_disabled = checked
+        self._view.refresh()
+
     # ------------------------------------------------------------------
     # Session restore
     # ------------------------------------------------------------------

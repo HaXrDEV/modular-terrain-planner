@@ -22,3 +22,8 @@ env/
 # OS
 Thumbs.db
 .DS_Store
+
+# PyInstaller
+build/
+dist/
+*.spec

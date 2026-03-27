@@ -16,6 +16,7 @@ A desktop tool for designing tabletop RPG dungeon layouts by placing modular ter
 - **Battle map overlay** — Drop any image onto the ground plane and align it to the grid
 - **Print list export** — Export a tile-count CSV straight to your slicer queue
 - **Assembly map export** — Generate a labeled 2D top-down PNG map and detailed placement CSV showing every tile's position, rotation, and stacking order
+- **Combined PDF export** — Export a multi-page PDF with the assembly map on page 1 and a formatted placement table on subsequent pages
 
 ---
 
@@ -81,6 +82,7 @@ python main.py
 10. **Battle map overlay** — Go to *Edit → Set Ground Image…*, pick an image file, then set its X/Y offset and width/height in grid cells so it lines up with your tile grid. Use *Edit → Clear Ground Image* to remove it.
 11. **Export** — Click *Export CSV* to save a print list with tile names and quantities.
 12. **Assembly map** — Go to *File → Export Assembly Map…* (Ctrl+Shift+E) to generate a labeled top-down PNG map and a detailed CSV listing every tile placement with its grid position, rotation, and z-offset.
+13. **Assembly PDF** — Go to *File → Export Assembly PDF…* (Ctrl+Shift+P) to export a combined PDF with the visual map on page 1 and a formatted placement table on the following pages.
 
 ---
 

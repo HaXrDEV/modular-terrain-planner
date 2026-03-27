@@ -1,13 +1,14 @@
-"""Export a 2D top-down assembly map (PNG) and detailed placement CSV."""
+"""Export assembly map (PNG), detailed placement CSV, and combined PDF."""
 
 import csv
 import math
 import os
 from typing import TYPE_CHECKING, List, Tuple
 
-from PyQt5.QtCore import Qt, QRect, QRectF, QPointF
+from PyQt5.QtCore import Qt, QRect, QRectF, QPointF, QMarginsF, QSizeF
 from PyQt5.QtGui import (
     QImage, QPainter, QColor, QFont, QPen, QBrush, QPolygonF, QFontMetrics,
+    QPageLayout, QPageSize,
 )
 
 if TYPE_CHECKING:
@@ -106,15 +107,15 @@ def _draw_rotation_arrow(
 
 
 # ---------------------------------------------------------------------------
-# PNG renderer
+# Map image renderer (shared by PNG and PDF exports)
 # ---------------------------------------------------------------------------
 
-def _render_map_png(
+def _render_map_image(
     grid_model: "GridModel",
     placed_with_ids: List[Tuple["PlacedTile", int]],
-    png_path: str,
     title: str,
-) -> None:
+) -> QImage:
+    """Render the assembly map and return it as a QImage."""
     cpx = _cell_px(grid_model.GRID_COLS, grid_model.GRID_ROWS)
     cols, rows = grid_model.GRID_COLS, grid_model.GRID_ROWS
     grid_w = cols * cpx
@@ -296,6 +297,16 @@ def _render_map_png(
         shown += 1
 
     p.end()
+    return img
+
+
+def _render_map_png(
+    grid_model: "GridModel",
+    placed_with_ids: List[Tuple["PlacedTile", int]],
+    png_path: str,
+    title: str,
+) -> None:
+    img = _render_map_image(grid_model, placed_with_ids, title)
     img.save(png_path, "PNG")
 
 
@@ -329,6 +340,163 @@ def _write_assembly_csv(
 
 
 # ---------------------------------------------------------------------------
+# PDF renderer
+# ---------------------------------------------------------------------------
+
+def _render_pdf(
+    grid_model: "GridModel",
+    placed_with_ids: List[Tuple["PlacedTile", int]],
+    pdf_path: str,
+    title: str,
+) -> None:
+    """Render a combined PDF: page 1 = assembly map, page 2+ = placement table."""
+    from PyQt5.QtGui import QPdfWriter
+
+    map_img = _render_map_image(grid_model, placed_with_ids, title)
+
+    # --- Set up PDF writer (landscape A4) ---
+    writer = QPdfWriter(pdf_path)
+    landscape = QPageLayout(
+        QPageSize(QPageSize.A4),
+        QPageLayout.Landscape,
+        QMarginsF(15, 15, 15, 15),  # mm
+    )
+    writer.setPageLayout(landscape)
+    writer.setResolution(150)
+    dpi = writer.resolution()
+
+    p = QPainter(writer)
+
+    page_w = writer.width()   # device pixels
+    page_h = writer.height()
+
+    # ---- Page 1: Assembly map image, scaled to fit ----
+    img_w, img_h = map_img.width(), map_img.height()
+    scale = min(page_w / img_w, page_h / img_h)
+    draw_w = int(img_w * scale)
+    draw_h = int(img_h * scale)
+    x_off = (page_w - draw_w) // 2
+    y_off = (page_h - draw_h) // 2
+    p.drawImage(QRect(x_off, y_off, draw_w, draw_h), map_img)
+
+    # ---- Page 2+: Placement table ----
+    writer.newPage()
+
+    mm = dpi / 25.4  # pixels per mm
+
+    # Fonts
+    title_font = QFont("Segoe UI", 14, QFont.Bold)
+    header_font = QFont("Segoe UI", 9, QFont.Bold)
+    body_font = QFont("Segoe UI", 8)
+    body_fm = QFontMetrics(body_font)
+    header_fm = QFontMetrics(header_font)
+
+    row_h = int(body_fm.height() * 1.6)
+    header_h = int(header_fm.height() * 1.8)
+
+    # Column layout (proportional widths)
+    col_defs = [
+        ("ID",    0.05),
+        ("Name",  0.25),
+        ("STL Path", 0.30),
+        ("X",     0.06),
+        ("Y",     0.06),
+        ("Rot",   0.06),
+        ("Z",     0.06),
+        ("W",     0.06),
+        ("H",     0.06),
+    ]
+    table_left = int(5 * mm)
+    table_w = page_w - int(10 * mm)
+    col_widths = [int(table_w * frac) for _, frac in col_defs]
+    # Distribute rounding remainder to the widest column
+    remainder = table_w - sum(col_widths)
+    col_widths[2] += remainder  # STL Path gets the slack
+
+    def _draw_table_header(y: int) -> int:
+        """Draw column headers and return the y below the header."""
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor(55, 55, 55)))
+        p.drawRect(table_left, y, table_w, header_h)
+        p.setFont(header_font)
+        p.setPen(QPen(QColor(Qt.white)))
+        cx = table_left
+        for i, (label, _) in enumerate(col_defs):
+            p.drawText(QRectF(cx + 4, y, col_widths[i] - 8, header_h),
+                        Qt.AlignVCenter | Qt.AlignLeft, label)
+            cx += col_widths[i]
+        return y + header_h
+
+    def _draw_row(y: int, row_data: list, bg: QColor) -> int:
+        """Draw one data row and return the y below it."""
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(bg))
+        p.drawRect(table_left, y, table_w, row_h)
+        p.setFont(body_font)
+        p.setPen(QPen(QColor(30, 30, 30)))
+        cx = table_left
+        for i, val in enumerate(row_data):
+            text = str(val)
+            elided = body_fm.elidedText(text, Qt.ElideRight, col_widths[i] - 8)
+            p.drawText(QRectF(cx + 4, y, col_widths[i] - 8, row_h),
+                        Qt.AlignVCenter | Qt.AlignLeft, elided)
+            cx += col_widths[i]
+        return y + row_h
+
+    # Title
+    p.setFont(title_font)
+    p.setPen(QPen(QColor(Qt.black)))
+    title_h = int(12 * mm)
+    p.drawText(QRectF(table_left, 0, table_w, title_h),
+               Qt.AlignVCenter | Qt.AlignLeft,
+               (title or "Assembly Map") + " \u2014 Placement List")
+    cur_y = title_h + int(2 * mm)
+
+    # Summary line
+    total = len(placed_with_ids)
+    unique = len({pt.definition.name for pt, _ in placed_with_ids})
+    summary_font = QFont("Segoe UI", 9)
+    p.setFont(summary_font)
+    p.setPen(QPen(QColor(80, 80, 80)))
+    p.drawText(QRectF(table_left, cur_y, table_w, int(5 * mm)),
+               Qt.AlignVCenter | Qt.AlignLeft,
+               f"{total} placements  \u00b7  {unique} unique tile types  "
+               f"\u00b7  Grid {grid_model.GRID_COLS}\u00d7{grid_model.GRID_ROWS}")
+    cur_y += int(7 * mm)
+
+    # Table header
+    cur_y = _draw_table_header(cur_y)
+
+    # Table rows
+    even_bg = QColor(255, 255, 255)
+    odd_bg = QColor(240, 240, 245)
+    for idx, (pt, tid) in enumerate(placed_with_ids):
+        # Check if we need a new page
+        if cur_y + row_h > page_h - int(5 * mm):
+            writer.newPage()
+            cur_y = int(5 * mm)
+            cur_y = _draw_table_header(cur_y)
+
+        gx = f"{pt.grid_x:.0f}" if pt.grid_x == int(pt.grid_x) else f"{pt.grid_x:.1f}"
+        gy = f"{pt.grid_y:.0f}" if pt.grid_y == int(pt.grid_y) else f"{pt.grid_y:.1f}"
+        zo = f"{pt.z_offset:.0f}" if pt.z_offset == int(pt.z_offset) else f"{pt.z_offset:.1f}"
+        row = [
+            tid,
+            pt.definition.name,
+            pt.definition.stl_path,
+            gx, gy,
+            f"{pt.rotation}\u00b0",
+            zo,
+            pt.effective_w,
+            pt.effective_h,
+        ]
+        bg = even_bg if idx % 2 == 0 else odd_bg
+        cur_y = _draw_row(cur_y, row, bg)
+
+    p.end()
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -359,3 +527,22 @@ def export_assembly_map(
     _write_assembly_csv(placed_with_ids, csv_path)
 
     return png_path, csv_path
+
+
+def export_assembly_pdf(
+    grid_model: "GridModel",
+    pdf_path: str,
+    title: str = "",
+) -> str:
+    """Export a combined PDF with the assembly map and placement table.
+
+    Returns the PDF path.
+    """
+    placed = grid_model.all_placed()
+    ordered = sorted(placed, key=lambda t: (t.z_offset, t.grid_y, t.grid_x))
+    placed_with_ids: List[Tuple["PlacedTile", int]] = [
+        (tile, idx + 1) for idx, tile in enumerate(ordered)
+    ]
+
+    _render_pdf(grid_model, placed_with_ids, pdf_path, title)
+    return pdf_path

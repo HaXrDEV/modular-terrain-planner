@@ -50,7 +50,7 @@ class PalettePanel(QWidget):
         )
         layout.addWidget(self._info_label)
 
-        self._export_btn = QPushButton("Export CSV")
+        self._export_btn = QPushButton("Export Build Plan")
         self._export_btn.clicked.connect(self.export_clicked)
         layout.addWidget(self._export_btn)
 

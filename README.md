@@ -1,6 +1,6 @@
 # D&D STL Dungeon Designer
 
-A desktop tool for designing tabletop RPG dungeon layouts by placing modular terrain STL tiles on a grid — like digital Lego. When you're done, export a print list as CSV so you know exactly how many of each tile to print.
+A desktop tool for designing tabletop RPG dungeon layouts by placing modular terrain STL tiles on a grid — like digital Lego. When you're done, export a build plan PDF with a visual assembly map and print list so you know exactly what to print and where it goes.
 
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![PyQt5](https://img.shields.io/badge/PyQt5-5.15%2B-green) ![OpenGL](https://img.shields.io/badge/OpenGL-4.6%20Core-orange)
 
@@ -14,9 +14,9 @@ A desktop tool for designing tabletop RPG dungeon layouts by placing modular ter
 - **Automatic tile sizing** — Bounding boxes are read directly from each STL file and mapped to grid cells (1 cell = 25 mm); inch-unit files (e.g. OpenForge) are detected and converted automatically
 - **Select, move & copy** — Click, rubber-band, or Shift-click to select tiles; drag to reposition, Ctrl+C/V to duplicate
 - **Battle map overlay** — Drop any image onto the ground plane and align it to the grid
-- **Print list export** — Export a tile-count CSV straight to your slicer queue
-- **Assembly map export** — Generate a labeled 2D top-down PNG map and detailed placement CSV showing every tile's position, rotation, and stacking order
-- **Combined PDF export** — Export a multi-page PDF with the assembly map on page 1 and a formatted placement table on subsequent pages
+- **Build plan export** — Export a PDF with a labeled top-down assembly map and a print list showing tile names, paths, and quantities
+- **Assembly map** — Export a standalone labeled 2D top-down PNG map showing every tile's position, rotation, and stacking order
+- **CSV print list** — Export a simple tile-count CSV for quick reference
 
 ---
 
@@ -80,9 +80,9 @@ python main.py
    - **5** — Toggle top-down orthographic mode (perspective-less overhead view; right-drag and WASD pan, scroll zooms)
 9. **Manage folders** — Click the × on a tab to unload that folder. Tiles already placed on the grid remain.
 10. **Battle map overlay** — Go to *Edit → Set Ground Image…*, pick an image file, then set its X/Y offset and width/height in grid cells so it lines up with your tile grid. Use *Edit → Clear Ground Image* to remove it.
-11. **Export** — Click *Export CSV* to save a print list with tile names and quantities.
-12. **Assembly map** — Go to *File → Export Assembly Map…* (Ctrl+Shift+E) to generate a labeled top-down PNG map and a detailed CSV listing every tile placement with its grid position, rotation, and z-offset.
-13. **Assembly PDF** — Go to *File → Export Assembly PDF…* (Ctrl+Shift+P) to export a combined PDF with the visual map on page 1 and a formatted placement table on the following pages.
+11. **Export build plan** — Click *Export Build Plan* in the palette panel or go to *File → Export Build Plan (PDF)…* (Ctrl+E) to export a PDF with the visual assembly map and a print list table.
+12. **Assembly map** — Go to *File → Export Assembly Map (PNG)…* to export a standalone labeled top-down PNG of the layout.
+13. **CSV print list** — Go to *File → Export Print List (CSV)…* (Ctrl+Shift+E) to export a simple tile-count CSV.
 
 ---
 

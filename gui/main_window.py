@@ -94,7 +94,7 @@ class MainWindow(QMainWindow):
         # Connections
         self._palette.tile_selected.connect(self._on_tile_selected)
         self._palette.load_folder_clicked.connect(self._on_load_folder)
-        self._palette.export_clicked.connect(self._on_export_csv)
+        self._palette.export_clicked.connect(self._on_export_assembly_pdf)
         self._palette.tab_closed.connect(self._on_tab_closed)
 
         self._view.tile_place_requested.connect(self._on_tile_placed)
@@ -160,20 +160,19 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        act_export_pdf = QAction("Export &Build Plan (PDF)\u2026", self)
+        act_export_pdf.setShortcut("Ctrl+E")
+        act_export_pdf.triggered.connect(self._on_export_assembly_pdf)
+        file_menu.addAction(act_export_pdf)
+
         act_export = QAction("&Export Print List (CSV)…", self)
-        act_export.setShortcut("Ctrl+E")
+        act_export.setShortcut("Ctrl+Shift+E")
         act_export.triggered.connect(self._on_export_csv)
         file_menu.addAction(act_export)
 
-        act_export_map = QAction("Export &Assembly Map\u2026", self)
-        act_export_map.setShortcut("Ctrl+Shift+E")
+        act_export_map = QAction("Export &Assembly Map (PNG)\u2026", self)
         act_export_map.triggered.connect(self._on_export_assembly_map)
         file_menu.addAction(act_export_map)
-
-        act_export_pdf = QAction("Export Assembly &PDF\u2026", self)
-        act_export_pdf.setShortcut("Ctrl+Shift+P")
-        act_export_pdf.triggered.connect(self._on_export_assembly_pdf)
-        file_menu.addAction(act_export_pdf)
 
         file_menu.addSeparator()
 
@@ -791,18 +790,16 @@ class MainWindow(QMainWindow):
                                     "Place some tiles first.")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Assembly Map", "assembly_map",
+            self, "Export Assembly Map", "assembly_map.png",
             "PNG image (*.png)")
         if not path:
             return
-        base = os.path.splitext(path)[0]
-        title = os.path.basename(base).replace("_", " ").title()
+        title = os.path.splitext(os.path.basename(path))[0].replace("_", " ").title()
         try:
-            png_path, csv_path = export_assembly_map(self._model, base,
-                                                      title=title)
+            png_path = export_assembly_map(self._model, path, title=title)
             QMessageBox.information(
                 self, "Exported",
-                f"Assembly map saved:\n\u2022 {png_path}\n\u2022 {csv_path}")
+                f"Assembly map saved:\n{png_path}")
         except Exception as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
 
@@ -812,7 +809,7 @@ class MainWindow(QMainWindow):
                                     "Place some tiles first.")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Assembly PDF", "assembly_map.pdf",
+            self, "Export Build Plan", "build_plan.pdf",
             "PDF files (*.pdf)")
         if not path:
             return
@@ -821,7 +818,7 @@ class MainWindow(QMainWindow):
             pdf_path = export_assembly_pdf(self._model, path, title=title)
             QMessageBox.information(
                 self, "Exported",
-                f"Assembly PDF saved:\n{pdf_path}")
+                f"Build plan saved:\n{pdf_path}")
         except Exception as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
 

@@ -1,6 +1,5 @@
-"""Export assembly map (PNG), detailed placement CSV, and combined PDF."""
+"""Export assembly map (PNG) and combined PDF."""
 
-import csv
 import math
 import os
 from typing import TYPE_CHECKING, List, Tuple
@@ -196,8 +195,9 @@ def _render_map_image(
                     Qt.AlignCenter, str(c + min_c))
     for r in range(0, rows, y_step):
         y = grid_top + r * cpx + cpx // 2
+        # Y-axis is flipped: top of image = high grid_y (matches 3D ortho view)
         p.drawText(QRectF(grid_left - 46, y - fm.height() // 2, 42, fm.height()),
-                    Qt.AlignRight | Qt.AlignVCenter, str(r + min_r))
+                    Qt.AlignRight | Qt.AlignVCenter, str(max_r - 1 - r))
 
     # ---- Tile rectangles (sorted by z_offset so top tiles paint last) ----
     tile_font = QFont("Segoe UI", max(6, cpx // 5), QFont.Bold)
@@ -205,7 +205,8 @@ def _render_map_image(
 
     for pt, tid in sorted(placed_with_ids, key=lambda t: t[0].z_offset):
         rx = grid_left + (pt.grid_x - min_c) * cpx
-        ry = grid_top + (pt.grid_y - min_r) * cpx
+        # Flip Y so +grid_y goes upward, matching 3D ortho view
+        ry = grid_top + (max_r - pt.grid_y - pt.effective_h) * cpx
         rw = pt.effective_w * cpx
         rh = pt.effective_h * cpx
         tile_rect = QRectF(rx, ry, rw, rh)
@@ -289,7 +290,7 @@ def _render_map_image(
     for name in sorted(seen_names):
         defn = seen_names[name]
         if ly + line_h > img_h - 10:
-            p.drawText(lx, ly + 12, "... (see CSV)")
+            p.drawText(lx, ly + 12, "... (see PDF)")
             break
         # Swatch
         p.setPen(Qt.NoPen)
@@ -321,7 +322,7 @@ def _render_map_image(
         if ly + line_h > img_h - 10 or shown >= _MAX_LEGEND_ENTRIES:
             remaining = len(placed_with_ids) - shown
             if remaining > 0:
-                p.drawText(lx, ly + 10, f"... and {remaining} more (see CSV)")
+                p.drawText(lx, ly + 10, f"... and {remaining} more (see PDF)")
             break
         rx_val = f"{pt.grid_x:.0f}" if pt.grid_x == int(pt.grid_x) else f"{pt.grid_x:.1f}"
         ry_val = f"{pt.grid_y:.0f}" if pt.grid_y == int(pt.grid_y) else f"{pt.grid_y:.1f}"
@@ -343,35 +344,6 @@ def _render_map_png(
 ) -> None:
     img = _render_map_image(grid_model, placed_with_ids, title)
     img.save(png_path, "PNG")
-
-
-# ---------------------------------------------------------------------------
-# CSV writer
-# ---------------------------------------------------------------------------
-
-def _write_assembly_csv(
-    placed_with_ids: List[Tuple["PlacedTile", int]],
-    csv_path: str,
-) -> None:
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "id", "name", "stl_path",
-            "grid_x", "grid_y", "rotation",
-            "z_offset", "effective_w", "effective_h",
-        ])
-        for pt, tid in placed_with_ids:
-            writer.writerow([
-                tid,
-                pt.definition.name,
-                pt.definition.stl_path,
-                pt.grid_x,
-                pt.grid_y,
-                pt.rotation,
-                pt.z_offset,
-                pt.effective_w,
-                pt.effective_h,
-            ])
 
 
 # ---------------------------------------------------------------------------
@@ -429,24 +401,17 @@ def _render_pdf(
     row_h = int(body_fm.height() * 1.6)
     header_h = int(header_fm.height() * 1.8)
 
-    # Column layout (proportional widths)
+    # Column layout matching the original print-list CSV (filename, stl_path, count)
     col_defs = [
-        ("ID",    0.05),
-        ("Name",  0.25),
-        ("STL Path", 0.30),
-        ("X",     0.06),
-        ("Y",     0.06),
-        ("Rot",   0.06),
-        ("Z",     0.06),
-        ("W",     0.06),
-        ("H",     0.06),
+        ("Filename", 0.30),
+        ("STL Path", 0.58),
+        ("Count",    0.12),
     ]
     table_left = int(5 * mm)
     table_w = page_w - int(10 * mm)
     col_widths = [int(table_w * frac) for _, frac in col_defs]
-    # Distribute rounding remainder to the widest column
     remainder = table_w - sum(col_widths)
-    col_widths[2] += remainder  # STL Path gets the slack
+    col_widths[1] += remainder  # STL Path gets the slack
 
     def _draw_table_header(y: int) -> int:
         """Draw column headers and return the y below the header."""
@@ -478,24 +443,33 @@ def _render_pdf(
             cx += col_widths[i]
         return y + row_h
 
+    # Build the same aggregated data as csv_exporter: {name: count} + path map
+    counts: dict = {}
+    path_map: dict = {}
+    for pt, _ in placed_with_ids:
+        name = pt.definition.name
+        counts[name] = counts.get(name, 0) + 1
+        path_map[name] = pt.definition.stl_path
+    csv_rows = sorted(counts.items(), key=lambda x: x[0].lower())
+
     # Title
     p.setFont(title_font)
     p.setPen(QPen(QColor(Qt.black)))
     title_h = int(12 * mm)
     p.drawText(QRectF(table_left, 0, table_w, title_h),
                Qt.AlignVCenter | Qt.AlignLeft,
-               (title or "Assembly Map") + " \u2014 Placement List")
+               (title or "Assembly Map") + " \u2014 Print List")
     cur_y = title_h + int(2 * mm)
 
     # Summary line
-    total = len(placed_with_ids)
-    unique = len({pt.definition.name for pt, _ in placed_with_ids})
+    total = sum(counts.values())
+    unique = len(counts)
     summary_font = QFont("Segoe UI", 9)
     p.setFont(summary_font)
     p.setPen(QPen(QColor(80, 80, 80)))
     p.drawText(QRectF(table_left, cur_y, table_w, int(5 * mm)),
                Qt.AlignVCenter | Qt.AlignLeft,
-               f"{total} placements  \u00b7  {unique} unique tile types  "
+               f"{total} tiles  \u00b7  {unique} unique types  "
                f"\u00b7  Grid {grid_model.GRID_COLS}\u00d7{grid_model.GRID_ROWS}")
     cur_y += int(7 * mm)
 
@@ -505,26 +479,13 @@ def _render_pdf(
     # Table rows
     even_bg = QColor(255, 255, 255)
     odd_bg = QColor(240, 240, 245)
-    for idx, (pt, tid) in enumerate(placed_with_ids):
-        # Check if we need a new page
+    for idx, (name, count) in enumerate(csv_rows):
         if cur_y + row_h > page_h - int(5 * mm):
             writer.newPage()
             cur_y = int(5 * mm)
             cur_y = _draw_table_header(cur_y)
 
-        gx = f"{pt.grid_x:.0f}" if pt.grid_x == int(pt.grid_x) else f"{pt.grid_x:.1f}"
-        gy = f"{pt.grid_y:.0f}" if pt.grid_y == int(pt.grid_y) else f"{pt.grid_y:.1f}"
-        zo = f"{pt.z_offset:.0f}" if pt.z_offset == int(pt.z_offset) else f"{pt.z_offset:.1f}"
-        row = [
-            tid,
-            pt.definition.name,
-            pt.definition.stl_path,
-            gx, gy,
-            f"{pt.rotation}\u00b0",
-            zo,
-            pt.effective_w,
-            pt.effective_h,
-        ]
+        row = [name, path_map.get(name, ""), count]
         bg = even_bg if idx % 2 == 0 else odd_bg
         cur_y = _draw_row(cur_y, row, bg)
 
@@ -537,15 +498,12 @@ def _render_pdf(
 
 def export_assembly_map(
     grid_model: "GridModel",
-    base_path: str,
+    png_path: str,
     title: str = "",
-) -> Tuple[str, str]:
-    """Export an assembly map PNG and detailed placement CSV.
+) -> str:
+    """Export an assembly map PNG.
 
-    *base_path* is used without extension; the function appends
-    ``_assembly_map.png`` and ``_assembly_list.csv``.
-
-    Returns ``(png_path, csv_path)``.
+    Returns the PNG path.
     """
     placed = grid_model.all_placed()
 
@@ -555,13 +513,8 @@ def export_assembly_map(
         (tile, idx + 1) for idx, tile in enumerate(ordered)
     ]
 
-    png_path = base_path + "_assembly_map.png"
-    csv_path = base_path + "_assembly_list.csv"
-
     _render_map_png(grid_model, placed_with_ids, png_path, title)
-    _write_assembly_csv(placed_with_ids, csv_path)
-
-    return png_path, csv_path
+    return png_path
 
 
 def export_assembly_pdf(

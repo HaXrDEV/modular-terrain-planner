@@ -101,6 +101,7 @@ class MainWindow(QMainWindow):
         self._view.tile_remove_requested.connect(self._on_tile_removed)
         self._view.tile_pickup_requested.connect(self._on_tile_pickup)
         self._view.tiles_move_requested.connect(self._on_tiles_moved)
+        self._view.selection_delete_requested.connect(self._on_selection_delete)
         self._view.selection_rotate_requested.connect(self._on_selection_rotate)
         self._view.rotate_requested.connect(self._on_rotate)
         self._view.deselect_requested.connect(self._on_deselect)
@@ -666,6 +667,17 @@ class MainWindow(QMainWindow):
         self._snapshot()
         self._model.remove_tile(tile)
         self._view._selection.discard(tile)
+        self._view.refresh()
+        self._mark_dirty()
+        self._update_status()
+
+    def _on_selection_delete(self) -> None:
+        if not self._view._selection:
+            return
+        self._snapshot()
+        for tile in list(self._view._selection):
+            self._model.remove_tile(tile)
+        self._view._selection.clear()
         self._view.refresh()
         self._mark_dirty()
         self._update_status()

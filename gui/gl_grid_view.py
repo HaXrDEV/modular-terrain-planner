@@ -180,6 +180,7 @@ class GLGridView(QOpenGLWidget):
     tile_pickup_requested      = pyqtSignal(object)   # emits PlacedTile
     tiles_move_requested       = pyqtSignal(object)   # emits list of (PlacedTile, new_gx, new_gy)
     paste_place_requested      = pyqtSignal(float, float)  # cx, cy (snapped grid coords)
+    selection_delete_requested = pyqtSignal()
     selection_rotate_requested = pyqtSignal()
     rotate_requested           = pyqtSignal()
     deselect_requested         = pyqtSignal()
@@ -1668,10 +1669,13 @@ class GLGridView(QOpenGLWidget):
             else:
                 self.rotate_requested.emit()
         elif key == Qt.Key_Delete:
-            mx, my = self._mouse_screen
-            tile = self._pick_tile(mx, my)
-            if tile is not None:
-                self.tile_remove_requested.emit(tile)
+            if self._selection:
+                self.selection_delete_requested.emit()
+            else:
+                mx, my = self._mouse_screen
+                tile = self._pick_tile(mx, my)
+                if tile is not None:
+                    self.tile_remove_requested.emit(tile)
         elif key == Qt.Key_Home:
             self._reset_camera()
         elif key == Qt.Key_Control:

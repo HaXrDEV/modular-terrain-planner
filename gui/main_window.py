@@ -16,6 +16,7 @@ from models.placed_tile import PlacedTile
 from models.tile_definition import TileDefinition
 from stl_loader.loader import load_stl_folder
 from export.csv_exporter import export_to_csv
+from export.assembly_map import export_assembly_map
 from persistence.settings import AppSettings
 from persistence.project import save_project, load_project
 from gui.gl_grid_view import GLGridView
@@ -163,6 +164,11 @@ class MainWindow(QMainWindow):
         act_export.setShortcut("Ctrl+E")
         act_export.triggered.connect(self._on_export_csv)
         file_menu.addAction(act_export)
+
+        act_export_map = QAction("Export &Assembly Map\u2026", self)
+        act_export_map.setShortcut("Ctrl+Shift+E")
+        act_export_map.triggered.connect(self._on_export_assembly_map)
+        file_menu.addAction(act_export_map)
 
         file_menu.addSeparator()
 
@@ -771,6 +777,27 @@ class MainWindow(QMainWindow):
         try:
             export_to_csv(self._model, path)
             QMessageBox.information(self, "Exported", f"Saved to:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+
+    def _on_export_assembly_map(self) -> None:
+        if not self._model.all_placed():
+            QMessageBox.information(self, "Nothing to export",
+                                    "Place some tiles first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Assembly Map", "assembly_map",
+            "PNG image (*.png)")
+        if not path:
+            return
+        base = os.path.splitext(path)[0]
+        title = os.path.basename(base).replace("_", " ").title()
+        try:
+            png_path, csv_path = export_assembly_map(self._model, base,
+                                                      title=title)
+            QMessageBox.information(
+                self, "Exported",
+                f"Assembly map saved:\n\u2022 {png_path}\n\u2022 {csv_path}")
         except Exception as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
 

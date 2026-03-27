@@ -15,6 +15,7 @@ A desktop tool for designing tabletop RPG dungeon layouts by placing modular ter
 - **Select, move & copy** — Click, rubber-band, or Shift-click to select tiles; drag to reposition, Ctrl+C/V to duplicate
 - **Battle map overlay** — Drop any image onto the ground plane and align it to the grid
 - **Print list export** — Export a tile-count CSV straight to your slicer queue
+- **Assembly map export** — Generate a labeled 2D top-down PNG map and detailed placement CSV showing every tile's position, rotation, and stacking order
 
 ---
 
@@ -79,6 +80,7 @@ python main.py
 9. **Manage folders** — Click the × on a tab to unload that folder. Tiles already placed on the grid remain.
 10. **Battle map overlay** — Go to *Edit → Set Ground Image…*, pick an image file, then set its X/Y offset and width/height in grid cells so it lines up with your tile grid. Use *Edit → Clear Ground Image* to remove it.
 11. **Export** — Click *Export CSV* to save a print list with tile names and quantities.
+12. **Assembly map** — Go to *File → Export Assembly Map…* (Ctrl+Shift+E) to generate a labeled top-down PNG map and a detailed CSV listing every tile placement with its grid position, rotation, and z-offset.
 
 ---
 
@@ -102,7 +104,8 @@ python main.py
 │   ├── palette_panel.py       # Left panel: folder tabs, tile list, preview, export
 │   └── gl_helpers.py          # Shared GLSL shaders + GPU geometry utilities
 └── export/
-    └── csv_exporter.py      # CSV print-list export
+    ├── csv_exporter.py      # CSV print-list export
+    └── assembly_map.py      # 2D assembly map PNG + detailed placement CSV
 ```
 
 ---

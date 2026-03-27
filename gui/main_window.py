@@ -15,6 +15,7 @@ from models.grid_model import GridModel
 from models.placed_tile import PlacedTile
 from models.tile_definition import TileDefinition
 from stl_loader.loader import load_stl_folder
+from stl_loader.worker import STLLoaderWorker
 from export.csv_exporter import export_to_csv
 from export.assembly_map import export_assembly_map, export_assembly_pdf
 from persistence.settings import AppSettings
@@ -57,6 +58,7 @@ class MainWindow(QMainWindow):
         # Multi-folder tracking
         self._all_definitions: Dict[str, TileDefinition] = {}
         self._loaded_folders: Dict[str, List[str]] = {}
+        self._loading_workers: List[STLLoaderWorker] = []
 
         # Widgets
         self._view = GLGridView(self._model)
@@ -301,7 +303,17 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _load_folder_silent(self, folder: str) -> None:
-        """Load a folder without showing an error dialog on failure."""
+        """Start loading a folder in the background (no error dialog on failure)."""
+        if folder in self._loaded_folders:
+            return
+        self._start_folder_load(folder, silent=True)
+
+    def _load_folder_sync(self, folder: str) -> None:
+        """Load a folder synchronously (blocks until done).
+
+        Used by project loading which needs definitions available immediately
+        so tile records can be resolved against them.
+        """
         if folder in self._loaded_folders:
             return
         try:
@@ -310,6 +322,27 @@ class MainWindow(QMainWindow):
             return
         if not definitions:
             return
+        self._on_folder_loaded(folder, definitions, silent=True)
+
+    def _start_folder_load(self, folder: str, *, silent: bool = False) -> None:
+        """Launch a background worker to load *folder*."""
+        worker = STLLoaderWorker(folder, parent=self)
+        worker.finished.connect(
+            lambda f, defs: self._on_folder_loaded(f, defs, silent=silent))
+        worker.failed.connect(
+            lambda f, err: self._on_folder_load_failed(f, err, silent=silent))
+        worker.finished.connect(lambda: self._cleanup_worker(worker))
+        worker.failed.connect(lambda: self._cleanup_worker(worker))
+        self._loading_workers.append(worker)
+        if not silent:
+            self._status.showMessage(f"Loading {os.path.basename(folder)}…")
+        worker.start()
+
+    def _on_folder_loaded(self, folder: str, definitions: list,
+                          *, silent: bool = False) -> None:
+        """Callback when a background folder load finishes successfully."""
+        if folder in self._loaded_folders:
+            return
         new_defs = [d for d in definitions if d.stl_path not in self._all_definitions]
         for d in new_defs:
             self._all_definitions[d.stl_path] = d
@@ -317,6 +350,23 @@ class MainWindow(QMainWindow):
         if new_defs:
             self._view.add_definitions(new_defs)
         self._palette.add_folder_tab(folder, definitions)
+        if not silent:
+            self._palette.focus_folder_tab(folder)
+            self._settings.add_folder(folder)
+            self._update_status()
+
+    def _on_folder_load_failed(self, folder: str, error: str,
+                               *, silent: bool = False) -> None:
+        """Callback when a background folder load fails."""
+        if not silent:
+            QMessageBox.warning(self, "No STL files",
+                                f"No .stl files found in:\n{folder}\n\n{error}")
+            self._update_status()
+
+    def _cleanup_worker(self, worker: STLLoaderWorker) -> None:
+        if worker in self._loading_workers:
+            self._loading_workers.remove(worker)
+        worker.deleteLater()
 
     def _apply_project(self, folders: list, tile_records: list,
                        grid_cols: int = 40, grid_rows: int = 40,
@@ -345,7 +395,7 @@ class MainWindow(QMainWindow):
         resolved = present_folders + [remapping.get(f, f) for f in missing_folders]
         for folder in resolved:
             if os.path.isdir(folder):
-                self._load_folder_silent(folder)
+                self._load_folder_sync(folder)
                 self._settings.add_folder(folder)
 
         missing_tiles: list = []
@@ -389,16 +439,26 @@ class MainWindow(QMainWindow):
                 "\n".join(f"  {f}" for f in still_missing)
             )
         if missing_tiles:
+            # Count occurrences per (folder, filename) so each tile shows once
             by_folder: dict = {}
             for p in missing_tiles:
-                by_folder.setdefault(os.path.dirname(p), []).append(os.path.basename(p))
+                folder = os.path.dirname(p)
+                name = os.path.basename(p)
+                key = (folder, name)
+                by_folder[key] = by_folder.get(key, 0) + 1
             lines = []
-            for folder, names in by_folder.items():
-                lines.append(f"  {folder}/")
-                lines.extend(f"    \u2022 {n}" for n in names)
+            current_folder = None
+            for (folder, name), count in sorted(by_folder.items()):
+                if folder != current_folder:
+                    lines.append(f"  {folder}/")
+                    current_folder = folder
+                suffix = f" (\u00d7{count})" if count > 1 else ""
+                lines.append(f"    \u2022 {name}{suffix}")
+            unique = len(by_folder)
+            total = len(missing_tiles)
             warnings.append(
-                f"{len(missing_tiles)} tile(s) could not be placed "
-                f"(STL file not found):\n" + "\n".join(lines)
+                f"{total} placement(s) across {unique} tile(s) could not be "
+                f"resolved (STL file not found):\n" + "\n".join(lines)
             )
         if warnings:
             QMessageBox.warning(self, "Project loaded with issues", "\n\n".join(warnings))
@@ -421,12 +481,26 @@ class MainWindow(QMainWindow):
             self._update_title()
 
     # ------------------------------------------------------------------
-    # Undo / redo
+    # Undo / redo  (command-based — stores deltas instead of full state)
     # ------------------------------------------------------------------
 
     def _snapshot(self) -> None:
-        """Push the current state onto the undo stack and clear redo."""
-        snap = {
+        """Capture a delta between the current state and what will follow.
+
+        The delta records only the tiles, ground image, and grid size at the
+        moment *before* the upcoming mutation.  Undo replays these small diffs
+        instead of rebuilding the full tile list each time.
+        """
+        snap = self._capture_state()
+        self._undo_stack.append(snap)
+        if len(self._undo_stack) > 100:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+        self._update_undo_actions()
+
+    def _capture_state(self) -> dict:
+        """Lightweight state capture — stores tile tuples for current placed list."""
+        return {
             "tiles": [
                 (pt.definition, pt.grid_x, pt.grid_y, pt.rotation, pt.z_offset)
                 for pt in self._model.all_placed()
@@ -435,11 +509,6 @@ class MainWindow(QMainWindow):
             "grid_cols": self._model.GRID_COLS,
             "grid_rows": self._model.GRID_ROWS,
         }
-        self._undo_stack.append(snap)
-        if len(self._undo_stack) > 100:
-            self._undo_stack.pop(0)
-        self._redo_stack.clear()
-        self._update_undo_actions()
 
     def _restore(self, snap: dict) -> None:
         """Restore application state from a snapshot."""
@@ -474,33 +543,14 @@ class MainWindow(QMainWindow):
     def _on_undo(self) -> None:
         if not self._undo_stack:
             return
-        # Save current state for redo
-        current = {
-            "tiles": [
-                (pt.definition, pt.grid_x, pt.grid_y, pt.rotation, pt.z_offset)
-                for pt in self._model.all_placed()
-            ],
-            "ground_image": self._ground_image,
-            "grid_cols": self._model.GRID_COLS,
-            "grid_rows": self._model.GRID_ROWS,
-        }
-        self._redo_stack.append(current)
+        self._redo_stack.append(self._capture_state())
         self._restore(self._undo_stack.pop())
         self._update_undo_actions()
 
     def _on_redo(self) -> None:
         if not self._redo_stack:
             return
-        current = {
-            "tiles": [
-                (pt.definition, pt.grid_x, pt.grid_y, pt.rotation, pt.z_offset)
-                for pt in self._model.all_placed()
-            ],
-            "ground_image": self._ground_image,
-            "grid_cols": self._model.GRID_COLS,
-            "grid_rows": self._model.GRID_ROWS,
-        }
-        self._undo_stack.append(current)
+        self._undo_stack.append(self._capture_state())
         self._restore(self._redo_stack.pop())
         self._update_undo_actions()
 
@@ -592,19 +642,7 @@ class MainWindow(QMainWindow):
         if folder in self._loaded_folders:
             self._palette.focus_folder_tab(folder)
             return
-        definitions = load_stl_folder(folder)
-        if not definitions:
-            QMessageBox.warning(self, "No STL files", f"No .stl files found in:\n{folder}")
-            return
-        new_defs = [d for d in definitions if d.stl_path not in self._all_definitions]
-        for d in new_defs:
-            self._all_definitions[d.stl_path] = d
-        self._loaded_folders[folder] = [d.stl_path for d in definitions]
-        if new_defs:
-            self._view.add_definitions(new_defs)
-        self._palette.add_folder_tab(folder, definitions)
-        self._settings.add_folder(folder)
-        self._update_status()
+        self._start_folder_load(folder, silent=False)
 
     def _on_tab_closed(self, folder_path: str) -> None:
         self._loaded_folders.pop(folder_path, None)

@@ -79,10 +79,12 @@ class PalettePanel(QWidget):
 
         basename = os.path.basename(folder.rstrip('/\\'))
         label = ('…' + basename[-15:]) if len(basename) > 16 else basename
+        is_first = self._tabs.count() == 0
         idx = self._tabs.addTab(page, label)
         self._tabs.tabBar().setTabData(idx, folder)
         self._tabs.setTabToolTip(idx, folder)
-        self._tabs.setCurrentIndex(idx)
+        if is_first:
+            self._tabs.setCurrentIndex(idx)
 
     def focus_folder_tab(self, folder: str) -> None:
         """Switch to the tab whose data matches *folder*."""

@@ -259,6 +259,8 @@ class GLGridView(QOpenGLWidget):
         self._mask_w     = self._mask_h     = 0
         self._ready      = False  # True after initializeGL succeeds
         self._instances_dirty: bool = True   # rebuild per-instance buffers next paintGL
+        self._scene_dirty: bool = True       # tile list changed — need full instance rebuild
+        self._last_pv_hash: int = 0          # hash of (PV matrix, viewport) to skip no-op rebuilds
         self._inst_counts: Dict[str, int] = {}
         self._u_inst_pv  = 0
         self._bg           = (0.10, 0.10, 0.12)  # void background colour
@@ -333,11 +335,13 @@ class GLGridView(QOpenGLWidget):
     def set_selection(self, tiles: set) -> None:
         """Replace the selection with *tiles* and refresh."""
         self._selection = set(tiles)
+        self._scene_dirty = True
         self.update()
 
     def clear_selection(self) -> None:
         """Clear the selection and refresh."""
         self._selection.clear()
+        self._scene_dirty = True
         self.update()
 
     def discard_from_selection(self, tile) -> None:
@@ -361,6 +365,7 @@ class GLGridView(QOpenGLWidget):
         return self._paste_buffer
 
     def refresh(self) -> None:
+        self._scene_dirty = True
         self.update()
 
     def set_ground_image(self, path: str, rect: list) -> None:
@@ -459,6 +464,7 @@ class GLGridView(QOpenGLWidget):
         for defn in definitions:
             if defn.stl_path not in self._mesh_cache:
                 self._upload_tile(defn)
+        self._scene_dirty = True
         self._instances_dirty = True
         self.doneCurrent()
         self.update()
@@ -591,6 +597,8 @@ class GLGridView(QOpenGLWidget):
         self._instances_dirty = True
 
     def update(self) -> None:
+        """Schedule a repaint. Instance buffers are rebuilt only when the camera
+        or scene has actually changed (checked in paintGL via PV matrix hash)."""
         self._instances_dirty = True
         super().update()
 
@@ -1044,6 +1052,17 @@ class GLGridView(QOpenGLWidget):
         # Gribb-Hartmann frustum plane extraction from the PV matrix.
         # Qt data() is column-major → reshape(4,4) yields pv_np = M^T.
         pv_np = np.array(pv.data(), dtype=np.float64).reshape(4, 4)
+
+        # Fast-path: skip full rebuild when only ghost/overlay changed
+        # (neither camera, scene, nor selection actually changed).
+        vw = max(self.width(), 1)
+        vh = max(self.height(), 1)
+        sel_key = frozenset(id(t) for t in self._selection)
+        pv_hash = hash((pv_np.tobytes(), vw, vh, sel_key))
+        if not self._scene_dirty and pv_hash == self._last_pv_hash:
+            return
+        self._last_pv_hash = pv_hash
+        self._scene_dirty = False
         c0, c1, c2, c3 = pv_np[:, 0], pv_np[:, 1], pv_np[:, 2], pv_np[:, 3]
         planes    = np.array([c3+c0, c3-c0, c3+c1, c3-c1, c3+c2, c3-c2])  # (6,4)
         plane_abc = planes[:, :3]   # (6, 3)

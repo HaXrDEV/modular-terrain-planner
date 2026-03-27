@@ -186,6 +186,10 @@ class GLGridView(QOpenGLWidget):
     deselect_requested         = pyqtSignal()
     hover_cell_changed         = pyqtSignal(int, int)
     ground_image_rect_changed  = pyqtSignal(list)
+    ground_image_drag_started  = pyqtSignal()
+    select_all_requested       = pyqtSignal()
+    zoom_fit_requested         = pyqtSignal()   # F key
+    free_mode_changed          = pyqtSignal(bool)  # Ctrl held/released
 
     # Camera defaults
     _DEFAULT_AZ   = 45.0
@@ -1262,6 +1266,19 @@ class GLGridView(QOpenGLWidget):
 
         return proj, view
 
+    def zoom_to_bounds(self, min_x: float, min_y: float, max_x: float, max_y: float) -> None:
+        """Frame the camera to show the given world-space bounding box."""
+        cx = (min_x + max_x) / 2.0
+        cy = (min_y + max_y) / 2.0
+        span = max(max_x - min_x, max_y - min_y, 1.0)
+        self._target = [cx, cy, 0.0]
+        if self._ortho_mode:
+            self._distance = span * 0.6
+        else:
+            fov_half = math.radians(22.5)
+            self._distance = max(4.0, min(200.0, (span / 2.0) / math.tan(fov_half) * 1.1))
+        self.update()
+
     def set_ortho_mode(self, enabled: bool) -> None:
         self._ortho_mode = enabled
         self.update()
@@ -1467,6 +1484,7 @@ class GLGridView(QOpenGLWidget):
                 # Start image drag
                 world = self._ray_to_world(event.x(), event.y(), 0.0)
                 if world:
+                    self.ground_image_drag_started.emit()
                     self._img_dragging = True
                     self._img_drag_start_world = world
                     self._img_drag_start_rect = list(self._img_rect)
@@ -1701,12 +1719,17 @@ class GLGridView(QOpenGLWidget):
                 tile = self._pick_tile(mx, my)
                 if tile is not None:
                     self.tile_remove_requested.emit(tile)
+        elif key == Qt.Key_A and (event.modifiers() & Qt.ControlModifier):
+            self.select_all_requested.emit()
         elif key == Qt.Key_Home:
             self._reset_camera()
+        elif key == Qt.Key_F:
+            self.zoom_fit_requested.emit()
         elif key == Qt.Key_Control:
             mx, my = self._mouse_screen
             fx, fy = self._compute_free_pos(mx, my)
             self._hover_pos = (fx, fy)
+            self.free_mode_changed.emit(True)
             self.update()
         elif key in (Qt.Key_W, Qt.Key_A, Qt.Key_S, Qt.Key_D):
             if not event.isAutoRepeat():
@@ -1728,6 +1751,7 @@ class GLGridView(QOpenGLWidget):
             cell = self._compute_hover_cell(mx, my)
             self._hover_pos = (float(cell[0]), float(cell[1]))
             self._hover_cell = cell
+            self.free_mode_changed.emit(False)
             self.update()
         else:
             super().keyReleaseEvent(event)

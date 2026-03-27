@@ -78,7 +78,8 @@ class PalettePanel(QWidget):
         page_layout.addWidget(lst)
 
         basename = os.path.basename(folder.rstrip('/\\'))
-        label = ('…' + basename[-15:]) if len(basename) > 16 else basename
+        short = ('…' + basename[-15:]) if len(basename) > 16 else basename
+        label = f"{short} ({len(definitions)})"
         is_first = self._tabs.count() == 0
         idx = self._tabs.addTab(page, label)
         self._tabs.tabBar().setTabData(idx, folder)

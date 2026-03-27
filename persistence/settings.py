@@ -17,8 +17,11 @@ class AppSettings:
 
     _DEFAULT_PAN_SPEED = 0.008
 
+    _MAX_PROJECTS = 10
+
     def __init__(self) -> None:
         self.recent_folders: List[str] = []
+        self.recent_projects: List[str] = []
         self.pan_speed: float = self._DEFAULT_PAN_SPEED
         self.theme: str = "auto"  # "auto" | "light" | "dark"
 
@@ -49,6 +52,7 @@ class AppSettings:
             if self._FILE.exists():
                 data = json.loads(self._FILE.read_text(encoding="utf-8"))
                 self.recent_folders = [str(f) for f in data.get("recent_folders", [])]
+                self.recent_projects = [str(p) for p in data.get("recent_projects", [])]
                 self.pan_speed = float(data.get("pan_speed", self._DEFAULT_PAN_SPEED))
                 if "theme" in data:
                     self.theme = str(data["theme"])
@@ -59,7 +63,9 @@ class AppSettings:
         """Persist current settings to disk; silently ignores write errors."""
         try:
             self._DIR.mkdir(parents=True, exist_ok=True)
-            data = {"recent_folders": self.recent_folders, "pan_speed": self.pan_speed,
+            data = {"recent_folders": self.recent_folders,
+                    "recent_projects": self.recent_projects,
+                    "pan_speed": self.pan_speed,
                     "theme": self.theme}
             self._FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except Exception:
@@ -80,4 +86,16 @@ class AppSettings:
     def remove_folder(self, folder: str) -> None:
         """Remove a folder from the recent list and persist immediately."""
         self.recent_folders = [f for f in self.recent_folders if f != folder]
+        self.save()
+
+    # ------------------------------------------------------------------
+    # Project helpers
+    # ------------------------------------------------------------------
+
+    def add_project(self, path: str) -> None:
+        """Record a project file as recently used and persist immediately."""
+        if path in self.recent_projects:
+            self.recent_projects.remove(path)
+        self.recent_projects.insert(0, path)
+        self.recent_projects = self.recent_projects[: self._MAX_PROJECTS]
         self.save()

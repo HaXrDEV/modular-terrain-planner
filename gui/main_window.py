@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
         self._is_dirty: bool = False
         self._ground_image: Optional[tuple] = None  # (path, [x, y, w, h])
         self._ground_image_aspect: float = 1.0
+        self._free_mode: bool = False
 
         # Undo / redo stacks — each entry is a state snapshot dict
         self._undo_stack: List[dict] = []
@@ -104,11 +105,15 @@ class MainWindow(QMainWindow):
         self._view.tile_pickup_requested.connect(self._on_tile_pickup)
         self._view.tiles_move_requested.connect(self._on_tiles_moved)
         self._view.selection_delete_requested.connect(self._on_selection_delete)
+        self._view.select_all_requested.connect(self._on_select_all)
+        self._view.zoom_fit_requested.connect(self._on_zoom_fit)
+        self._view.free_mode_changed.connect(self._on_free_mode_changed)
         self._view.selection_rotate_requested.connect(self._on_selection_rotate)
         self._view.rotate_requested.connect(self._on_rotate)
         self._view.deselect_requested.connect(self._on_deselect)
         self._view.paste_place_requested.connect(self._on_paste_place)
         self._view.ground_image_rect_changed.connect(self._on_ground_image_moved)
+        self._view.ground_image_drag_started.connect(self._snapshot)
 
         self._img_scale_slider.valueChanged.connect(self._on_img_scale_changed)
 
@@ -153,6 +158,9 @@ class MainWindow(QMainWindow):
         act_save_as.setShortcut("Ctrl+Shift+S")
         act_save_as.triggered.connect(self._on_save_as)
         file_menu.addAction(act_save_as)
+
+        self._recent_menu = file_menu.addMenu("&Recent Projects")
+        self._rebuild_recent_menu()
 
         file_menu.addSeparator()
 
@@ -210,6 +218,11 @@ class MainWindow(QMainWindow):
         self._act_paste.setShortcut("Ctrl+V")
         self._act_paste.triggered.connect(self._on_paste)
         edit_menu.addAction(self._act_paste)
+
+        act_select_all = QAction("Select &All", self)
+        act_select_all.setShortcut("Ctrl+A")
+        act_select_all.triggered.connect(self._on_select_all)
+        edit_menu.addAction(act_select_all)
 
         edit_menu.addSeparator()
 
@@ -600,6 +613,8 @@ class MainWindow(QMainWindow):
         self._apply_project(folders, tile_records, grid_cols, grid_rows, ground_image)
         self._project_path = path
         self._is_dirty = False
+        self._settings.add_project(path)
+        self._rebuild_recent_menu()
         self._update_title()
 
     def _on_save(self) -> None:
@@ -629,6 +644,40 @@ class MainWindow(QMainWindow):
             return
         self._project_path = path
         self._is_dirty = False
+        self._settings.add_project(path)
+        self._rebuild_recent_menu()
+        self._update_title()
+
+    def _rebuild_recent_menu(self) -> None:
+        """Rebuild the File → Recent Projects submenu from settings."""
+        self._recent_menu.clear()
+        for path in self._settings.recent_projects:
+            if not os.path.isfile(path):
+                continue
+            name = os.path.basename(path)
+            act = QAction(name, self)
+            act.setToolTip(path)
+            act.triggered.connect(lambda _checked, p=path: self._open_recent(p))
+            self._recent_menu.addAction(act)
+        self._recent_menu.setEnabled(bool(self._recent_menu.actions()))
+
+    def _open_recent(self, path: str) -> None:
+        """Open a project from the recent list."""
+        if not self._confirm_discard():
+            return
+        if not os.path.isfile(path):
+            QMessageBox.warning(self, "File not found", f"Project file no longer exists:\n{path}")
+            return
+        try:
+            folders, tile_records, grid_cols, grid_rows, ground_image = load_project(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Open failed", str(exc))
+            return
+        self._apply_project(folders, tile_records, grid_cols, grid_rows, ground_image)
+        self._project_path = path
+        self._is_dirty = False
+        self._settings.add_project(path)
+        self._rebuild_recent_menu()
         self._update_title()
 
     # ------------------------------------------------------------------
@@ -666,6 +715,24 @@ class MainWindow(QMainWindow):
         self._palette.deselect()
         self._view.set_pending_tile(None, 0)
         self._update_status()
+
+    def _on_select_all(self) -> None:
+        self._view.set_selection(set(self._model.all_placed()))
+
+    def _on_zoom_fit(self) -> None:
+        """Frame the camera around the selection, or all placed tiles, or the full grid."""
+        selection = list(self._view.selected_tiles())
+        tiles = selection if selection else self._model.all_placed()
+        if tiles:
+            min_x = min(pt.grid_x for pt in tiles)
+            min_y = min(pt.grid_y for pt in tiles)
+            max_x = max(pt.grid_x + pt.effective_w for pt in tiles)
+            max_y = max(pt.grid_y + pt.effective_h for pt in tiles)
+        else:
+            min_x, min_y = 0.0, 0.0
+            max_x = float(self._model.GRID_COLS)
+            max_y = float(self._model.GRID_ROWS)
+        self._view.zoom_to_bounds(min_x, min_y, max_x, max_y)
 
     def _on_tile_pickup(self, tile) -> None:
         """Middle-click: select the picked-up tile's definition and rotation."""
@@ -1101,6 +1168,10 @@ class MainWindow(QMainWindow):
         self._view.set_background_color(r, g, b, ground=ground, grid=grid)
         self._palette.set_preview_background(r, g, b)
 
+    def _on_free_mode_changed(self, free: bool) -> None:
+        self._free_mode = free
+        self._update_status()
+
     def _update_status(self) -> None:
         name = self._selected_definition.name if self._selected_definition else "None"
         counts = self._model.get_counts()
@@ -1108,8 +1179,10 @@ class MainWindow(QMainWindow):
         counts_str = ", ".join(
             f"{k}: {v}" for k, v in sorted(counts.items())
         ) or "—"
+        snap_str = "FREE" if self._free_mode else "SNAP"
         self._status.showMessage(
             f"Selected: {name}  |  Rotation: {self._pending_rotation}°  |  "
+            f"Placement: {snap_str}  |  "
             f"Total placed: {total}  |  {counts_str}"
         )
         self._palette.update_info(

@@ -13,6 +13,47 @@ from typing import Any, Dict, List, Optional, Tuple
 
 PROJECT_VERSION = 4
 
+# ------------------------------------------------------------------
+# Version migration
+# ------------------------------------------------------------------
+
+def _migrate(data: dict) -> dict:
+    """Migrate a project dict from any older version up to PROJECT_VERSION.
+
+    Each step transforms the dict in-place and bumps the version number.
+    Unknown future versions raise ValueError.
+    """
+    version = data.get("version", 1)
+
+    if version > PROJECT_VERSION:
+        raise ValueError(
+            f"Project file is version {version}, but this application only "
+            f"supports up to version {PROJECT_VERSION}. Please update the app."
+        )
+
+    # v1 → v2: added grid_cols / grid_rows (default 40×40)
+    if version < 2:
+        data.setdefault("grid_cols", 40)
+        data.setdefault("grid_rows", 40)
+        data["version"] = 2
+
+    # v2 → v3: added z_offset per tile (default 0.0)
+    if version < 3:
+        for t in data.get("tiles", []):
+            t.setdefault("z_offset", 0.0)
+        data["version"] = 3
+
+    # v3 → v4: added ground_image (optional)
+    if version < 4:
+        data.setdefault("ground_image", None)
+        data["version"] = 4
+
+    return data
+
+
+# ------------------------------------------------------------------
+# Save
+# ------------------------------------------------------------------
 
 def save_project(
     path: str,
@@ -56,6 +97,10 @@ def save_project(
         json.dump(data, fh, indent=2)
 
 
+# ------------------------------------------------------------------
+# Load
+# ------------------------------------------------------------------
+
 def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]], int, int, Optional[Dict[str, Any]]]:
     """
     Read a project file and return
@@ -72,6 +117,9 @@ def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]], int, int, 
 
     if not isinstance(data, dict):
         raise ValueError("Invalid project file format.")
+
+    # Migrate from any older version to current
+    data = _migrate(data)
 
     grid_cols = int(data.get("grid_cols", 40))
     grid_rows = int(data.get("grid_rows", 40))

@@ -330,18 +330,19 @@ class MainWindow(QMainWindow):
         if folder in self._loaded_folders:
             return
         try:
-            definitions = load_stl_folder(folder)
+            errors: list = []
+            definitions = load_stl_folder(folder, errors=errors)
         except Exception:
             return
         if not definitions:
             return
-        self._on_folder_loaded(folder, definitions, silent=True)
+        self._on_folder_loaded(folder, definitions, errors, silent=True)
 
     def _start_folder_load(self, folder: str, *, silent: bool = False) -> None:
         """Launch a background worker to load *folder*."""
         worker = STLLoaderWorker(folder, parent=self)
         worker.finished.connect(
-            lambda f, defs: self._on_folder_loaded(f, defs, silent=silent))
+            lambda f, defs, errs: self._on_folder_loaded(f, defs, errs, silent=silent))
         worker.failed.connect(
             lambda f, err: self._on_folder_load_failed(f, err, silent=silent))
         worker.finished.connect(lambda: self._cleanup_worker(worker))
@@ -352,7 +353,7 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _on_folder_loaded(self, folder: str, definitions: list,
-                          *, silent: bool = False) -> None:
+                          errors: list = None, *, silent: bool = False) -> None:
         """Callback when a background folder load finishes successfully."""
         if folder in self._loaded_folders:
             return
@@ -367,6 +368,13 @@ class MainWindow(QMainWindow):
             self._palette.focus_folder_tab(folder)
             self._settings.add_folder(folder)
             self._update_status()
+        if errors:
+            basename = os.path.basename(folder)
+            detail = "\n".join(f"  \u2022 {e}" for e in errors)
+            QMessageBox.warning(
+                self, "Some STL files skipped",
+                f"{len(errors)} file(s) in '{basename}' could not be loaded:\n\n{detail}"
+            )
 
     def _on_folder_load_failed(self, folder: str, error: str,
                                *, silent: bool = False) -> None:
@@ -694,7 +702,16 @@ class MainWindow(QMainWindow):
         self._start_folder_load(folder, silent=False)
 
     def _on_tab_closed(self, folder_path: str) -> None:
-        self._loaded_folders.pop(folder_path, None)
+        stl_paths = self._loaded_folders.pop(folder_path, [])
+        # Free GPU resources for tiles that are no longer needed by any folder
+        still_used = set()
+        for paths in self._loaded_folders.values():
+            still_used.update(paths)
+        to_free = [p for p in stl_paths if p not in still_used]
+        if to_free:
+            self._view.remove_definitions(to_free)
+            for p in to_free:
+                self._all_definitions.pop(p, None)
         self._settings.remove_folder(folder_path)
         self._update_status()
 

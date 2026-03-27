@@ -172,12 +172,13 @@ def load_tile_mesh(
     return verts.astype(np.float32)
 
 
-def load_stl_folder(folder_path: str) -> List[TileDefinition]:
+def load_stl_folder(folder_path: str, errors: List[str] = None) -> List[TileDefinition]:
     """
     Scan *folder_path* for .stl files (case-insensitive) and return a list of
     TileDefinition objects with bounding-box-derived grid sizes.
 
-    Files that fail to parse are silently skipped with a printed warning.
+    Files that fail to parse are skipped. If *errors* is a list, a human-readable
+    message is appended for each skipped file; otherwise failures are printed.
     """
     from stl import mesh as stl_mesh
 
@@ -224,7 +225,11 @@ def load_stl_folder(folder_path: str) -> List[TileDefinition]:
             ]
             lod_tri_counts = [len(t) for t in lod_triangles]
         except Exception as exc:
-            print(f"[STL loader] Skipping '{name}': {exc}")
+            msg = f"{name}: {exc}"
+            if errors is not None:
+                errors.append(msg)
+            else:
+                print(f"[STL loader] Skipping '{msg}'")
             continue
 
         color = TileDefinition.color_for_name(name)

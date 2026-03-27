@@ -458,6 +458,28 @@ class GLGridView(QOpenGLWidget):
         self.doneCurrent()
         self.update()
 
+    def remove_definitions(self, stl_paths: List[str]) -> None:
+        """Free GPU resources for the given STL paths (all LOD levels)."""
+        if not self._ready:
+            return
+        self.makeCurrent()
+        for path in stl_paths:
+            for lod in range(10):  # max conceivable LOD tiers
+                key = (path, lod)
+                entry = self._mesh_cache.pop(key, None)
+                if entry is not None:
+                    vao, vbo, _ = entry
+                    glDeleteVertexArrays(1, [vao])
+                    glDeleteBuffers(1, [vbo])
+                entry = self._inst_cache.pop(key, None)
+                if entry is not None:
+                    vao, vbo, _ = entry
+                    glDeleteVertexArrays(1, [vao])
+                    glDeleteBuffers(1, [vbo])
+        self._scene_dirty = True
+        self.doneCurrent()
+        self.update()
+
     def add_definitions(self, definitions: List[TileDefinition]) -> None:
         """Upload VBOs for new definitions without clearing existing cached tiles."""
         if not self._ready:

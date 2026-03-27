@@ -13,14 +13,14 @@ class STLLoaderWorker(QThread):
 
     Signals
     -------
-    finished(folder, definitions)
-        Emitted when loading completes successfully.
+    finished(folder, definitions, errors)
+        Emitted when loading completes (possibly with some files skipped).
     failed(folder, error_message)
-        Emitted when loading fails or finds no STL files.
+        Emitted when loading fails entirely or finds no STL files.
     """
 
-    finished = pyqtSignal(str, list)   # (folder_path, List[TileDefinition])
-    failed   = pyqtSignal(str, str)    # (folder_path, error_message)
+    finished = pyqtSignal(str, list, list)  # (folder_path, definitions, errors)
+    failed   = pyqtSignal(str, str)         # (folder_path, error_message)
 
     def __init__(self, folder: str, parent=None) -> None:
         super().__init__(parent)
@@ -28,11 +28,12 @@ class STLLoaderWorker(QThread):
 
     def run(self) -> None:
         try:
-            definitions = load_stl_folder(self._folder)
+            errors: List[str] = []
+            definitions = load_stl_folder(self._folder, errors=errors)
         except Exception as exc:
             self.failed.emit(self._folder, str(exc))
             return
         if not definitions:
             self.failed.emit(self._folder, "No .stl files found")
             return
-        self.finished.emit(self._folder, definitions)
+        self.finished.emit(self._folder, definitions, errors)

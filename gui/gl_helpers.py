@@ -123,25 +123,43 @@ void main() {
 }
 """
 
-OUTLINE_VERT = """\
+EDGE_VERT = """\
 #version 460 core
 layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec3 aNorm;
-uniform mat4 uMVP;
-uniform vec2 uNDCOffset;
+out vec2 vUV;
 void main() {
-    vec4 pos = uMVP * vec4(aPos, 1.0);
-    pos.xy += uNDCOffset * pos.w;
-    gl_Position = pos;
+    gl_Position = vec4(aPos, 1.0);
+    vUV = aPos.xy * 0.5 + 0.5;
 }
 """
 
-OUTLINE_FRAG = """\
+EDGE_FRAG = """\
 #version 460 core
-uniform vec4 uColor;
+in vec2 vUV;
+uniform sampler2D uMask;
+uniform vec2 uPixelSize;
+uniform vec4 uOutlineColor;
+uniform float uThickness;
 out vec4 FragColor;
 void main() {
-    FragColor = uColor;
+    float center = texture(uMask, vUV).r;
+    // Sample in a cross pattern at the outline thickness
+    float maxNeighbor = 0.0;
+    for (float i = 1.0; i <= uThickness; i += 1.0) {
+        maxNeighbor = max(maxNeighbor, texture(uMask, vUV + vec2( i * uPixelSize.x, 0.0)).r);
+        maxNeighbor = max(maxNeighbor, texture(uMask, vUV + vec2(-i * uPixelSize.x, 0.0)).r);
+        maxNeighbor = max(maxNeighbor, texture(uMask, vUV + vec2(0.0,  i * uPixelSize.y)).r);
+        maxNeighbor = max(maxNeighbor, texture(uMask, vUV + vec2(0.0, -i * uPixelSize.y)).r);
+        // Diagonals
+        maxNeighbor = max(maxNeighbor, texture(uMask, vUV + vec2( i * uPixelSize.x,  i * uPixelSize.y)).r);
+        maxNeighbor = max(maxNeighbor, texture(uMask, vUV + vec2(-i * uPixelSize.x,  i * uPixelSize.y)).r);
+        maxNeighbor = max(maxNeighbor, texture(uMask, vUV + vec2( i * uPixelSize.x, -i * uPixelSize.y)).r);
+        maxNeighbor = max(maxNeighbor, texture(uMask, vUV + vec2(-i * uPixelSize.x, -i * uPixelSize.y)).r);
+    }
+    // Edge pixel: not inside the mask but a neighbor is
+    float edge = maxNeighbor * (1.0 - center);
+    if (edge < 0.5) discard;
+    FragColor = uOutlineColor;
 }
 """
 

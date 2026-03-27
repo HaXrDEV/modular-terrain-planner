@@ -30,7 +30,7 @@ try:
         GL_BACK, GL_FRONT, GL_CULL_FACE,
         GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST, GL_DYNAMIC_DRAW, GL_FALSE, GL_FLOAT,
         GL_STENCIL_BUFFER_BIT, GL_STENCIL_TEST,
-        GL_ALWAYS, GL_EQUAL, GL_NOTEQUAL, GL_KEEP, GL_REPLACE, GL_TRUE,
+        GL_ALWAYS, GL_EQUAL, GL_KEEP, GL_REPLACE, GL_TRUE,
         glColorMask, glStencilFunc, glStencilOp,
         GL_FRAGMENT_SHADER, GL_LINE_LOOP, GL_LINES, GL_LINK_STATUS, GL_STATIC_DRAW,
         GL_TRIANGLES, GL_VERTEX_SHADER, GL_BLEND, GL_SRC_ALPHA,
@@ -38,11 +38,15 @@ try:
         GL_TEXTURE_2D, GL_TEXTURE0, GL_LINEAR, GL_CLAMP_TO_EDGE,
         GL_RGBA, GL_UNSIGNED_BYTE, GL_TEXTURE_MIN_FILTER, GL_TEXTURE_MAG_FILTER,
         GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T,
+        GL_FRAMEBUFFER, GL_READ_FRAMEBUFFER, GL_DRAW_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0, GL_RED, GL_R8,
+        GL_FRAMEBUFFER_COMPLETE, GL_NEAREST,
+        GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL_ATTACHMENT,
         glAttachShader, glBindBuffer, glBindVertexArray, glBlendFunc,
         glBufferData, glClear, glClearColor, glCompileShader, glCreateProgram,
         glCreateShader, glDeleteBuffers, glDeleteShader, glDeleteVertexArrays,
-        glCullFace, glDepthMask, glDisable, glDrawArrays, glDrawArraysInstanced, glEnable,
-        glEnableVertexAttribArray,
+        glCullFace, glDepthMask, glDisable, glDrawArrays, glDrawArraysInstanced,
+        glDrawArraysInstancedBaseInstance, glEnable, glEnableVertexAttribArray,
         glGenBuffers, glGenVertexArrays, glGetProgramInfoLog, glGetProgramiv,
         glGetShaderInfoLog, glGetShaderiv, glGetUniformLocation, glLinkProgram,
         glLineWidth, glShaderSource, glUniform1f, glUniform1i, glUniform2f, glUniform3f,
@@ -50,6 +54,11 @@ try:
         glVertexAttribPointer,
         glViewport, glGenTextures, glBindTexture, glTexImage2D, glTexParameteri,
         glDeleteTextures, glActiveTexture,
+        glGenFramebuffers, glBindFramebuffer, glFramebufferTexture2D,
+        glCheckFramebufferStatus, glDeleteFramebuffers,
+        glGenRenderbuffers, glBindRenderbuffer, glRenderbufferStorage,
+        glFramebufferRenderbuffer, glDeleteRenderbuffers,
+        glBlitFramebuffer,
     )
     _GL_OK = True
 except ImportError:
@@ -61,7 +70,7 @@ from models.tile_definition import TileDefinition
 from gui.gl_helpers import (
     MESH_VERT as _MESH_VERT, MESH_FRAG as _MESH_FRAG,
     INST_VERT as _INST_VERT, INST_FRAG as _INST_FRAG,
-    OUTLINE_VERT as _OUTLINE_VERT, OUTLINE_FRAG as _OUTLINE_FRAG,
+    EDGE_VERT as _EDGE_VERT, EDGE_FRAG as _EDGE_FRAG,
     build_vdata as _build_vdata, upload_geometry as _upload_geometry,
     build_program as _build_program_fn, compile_shader as _compile_fn,
 )
@@ -237,7 +246,6 @@ class GLGridView(QOpenGLWidget):
         self._flat_prog    = 0
         self._tex_prog     = 0
         self._inst_prog    = 0   # instanced mesh shader
-        self._outline_prog = 0   # solid-colour back-face extrusion outline
         # Caches keyed by (stl_path, lod_level).  lod_level 0 = full quality.
         # _mesh_cache: ghost/preview draws (per-draw uniforms, _mesh_prog)
         # _inst_cache: instanced placed-tile draws (_inst_prog)
@@ -245,7 +253,9 @@ class GLGridView(QOpenGLWidget):
         self._inst_cache: Dict[Tuple[str, int], Tuple[int, int, int]] = {}
         self._ground_vao = self._ground_vbo = self._ground_n = 0
         self._grid_vao   = self._grid_vbo   = self._grid_n   = 0
-        self._sel_vao    = self._sel_vbo    = 0   # scratch VAO for selection highlights
+        self._overlay_vao = self._overlay_vbo = 0  # scratch VAO for 2D overlays
+        self._mask_fbo   = self._mask_tex   = self._mask_rbo = 0
+        self._mask_w     = self._mask_h     = 0
         self._ready      = False  # True after initializeGL succeeds
         self._instances_dirty: bool = True   # rebuild per-instance buffers next paintGL
         self._inst_counts: Dict[str, int] = {}
@@ -431,8 +441,7 @@ class GLGridView(QOpenGLWidget):
             self._flat_prog    = self._build_program(_FLAT_VERT,    _FLAT_FRAG)
             self._tex_prog     = self._build_program(_TEX_VERT,     _TEX_FRAG)
             self._inst_prog    = self._build_program(_INST_VERT,    _INST_FRAG)
-            self._outline_prog = self._build_program(_OUTLINE_VERT, _OUTLINE_FRAG)
-
+            self._edge_prog    = self._build_program(_EDGE_VERT,    _EDGE_FRAG)
             # Uniform locations — mesh (per-draw, used for ghosts)
             p = self._mesh_prog
             self._u_mvp   = glGetUniformLocation(p, b"uMVP")
@@ -441,13 +450,14 @@ class GLGridView(QOpenGLWidget):
             self._u_alpha = glGetUniformLocation(p, b"uAlpha")
             self._u_rotz  = glGetUniformLocation(p, b"uRotZ")
 
-            # Uniform locations — outline
-            self._u_outline_mvp    = glGetUniformLocation(self._outline_prog, b"uMVP")
-            self._u_outline_color  = glGetUniformLocation(self._outline_prog, b"uColor")
-            self._u_outline_offset = glGetUniformLocation(self._outline_prog, b"uNDCOffset")
-
             # Uniform locations — instanced
             self._u_inst_pv = glGetUniformLocation(self._inst_prog, b"uPV")
+
+            # Uniform locations — edge detection (fullscreen quad on mask texture)
+            self._u_edge_mask     = glGetUniformLocation(self._edge_prog, b"uMask")
+            self._u_edge_px       = glGetUniformLocation(self._edge_prog, b"uPixelSize")
+            self._u_edge_color    = glGetUniformLocation(self._edge_prog, b"uOutlineColor")
+            self._u_edge_thick    = glGetUniformLocation(self._edge_prog, b"uThickness")
 
             # Uniform locations — flat
             p = self._flat_prog
@@ -482,13 +492,12 @@ class GLGridView(QOpenGLWidget):
             glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
             glBindVertexArray(0)
 
-            # Scratch VAO for selection highlight quads (updated each frame)
-            self._sel_vao = int(glGenVertexArrays(1))
-            self._sel_vbo = int(glGenBuffers(1))
-            glBindVertexArray(self._sel_vao)
-            glBindBuffer(GL_ARRAY_BUFFER, self._sel_vbo)
-            placeholder = np.zeros(18, dtype=np.float32)
-            glBufferData(GL_ARRAY_BUFFER, placeholder.nbytes, placeholder, GL_STATIC_DRAW)
+            # Scratch VAO for 2D overlays (rubber-band box, tile highlights)
+            self._overlay_vao = int(glGenVertexArrays(1))
+            self._overlay_vbo = int(glGenBuffers(1))
+            glBindVertexArray(self._overlay_vao)
+            glBindBuffer(GL_ARRAY_BUFFER, self._overlay_vbo)
+            glBufferData(GL_ARRAY_BUFFER, 48, None, GL_DYNAMIC_DRAW)
             glEnableVertexAttribArray(0)
             glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
             glBindVertexArray(0)
@@ -503,16 +512,62 @@ class GLGridView(QOpenGLWidget):
         except Exception as exc:
             QMessageBox.critical(self, "OpenGL init error", str(exc))
 
+    def _ensure_mask_fbo(self, w: int, h: int) -> None:
+        """Create or resize the offscreen mask FBO for selection edge detection."""
+        if self._mask_w == w and self._mask_h == h:
+            return
+        if self._mask_fbo:
+            glDeleteFramebuffers(1, [self._mask_fbo])
+            glDeleteTextures(1, [self._mask_tex])
+            glDeleteRenderbuffers(1, [self._mask_rbo])
+
+        # Color attachment: single-channel mask texture
+        self._mask_tex = int(glGenTextures(1))
+        glBindTexture(GL_TEXTURE_2D, self._mask_tex)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, None)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+
+        # Depth-stencil renderbuffer (receives blitted stencil from main FBO)
+        self._mask_rbo = int(glGenRenderbuffers(1))
+        glBindRenderbuffer(GL_RENDERBUFFER, self._mask_rbo)
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h)
+        glBindRenderbuffer(GL_RENDERBUFFER, 0)
+
+        # Assemble FBO
+        self._mask_fbo = int(glGenFramebuffers(1))
+        glBindFramebuffer(GL_FRAMEBUFFER, self._mask_fbo)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, self._mask_tex, 0)
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                                  GL_RENDERBUFFER, self._mask_rbo)
+        status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
+        if status != GL_FRAMEBUFFER_COMPLETE:
+            print(f"WARNING: Selection mask FBO incomplete: {status}")
+        glBindFramebuffer(GL_FRAMEBUFFER,
+                          self.defaultFramebufferObject())
+        glBindTexture(GL_TEXTURE_2D, 0)
+        self._mask_w, self._mask_h = w, h
+
     def resizeGL(self, w: int, h: int) -> None:
         glViewport(0, 0, w, h)
+        self._instances_dirty = True
+
+    def update(self) -> None:
+        self._instances_dirty = True
+        super().update()
 
     def paintGL(self) -> None:
         if not self._ready:
             return
 
-        # Rebuild per-instance GPU data every frame — LOD selection depends on
-        # camera distance, which changes whenever the camera moves.
-        self._rebuild_instance_buffers()
+        # Rebuild per-instance GPU data when the scene or camera has changed.
+        # LOD selection depends on camera distance and viewport size.
+        if self._instances_dirty:
+            self._rebuild_instance_buffers()
+            self._instances_dirty = False
 
         glEnable(GL_DEPTH_TEST)   # QPainter may have disabled this in a prior frame
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)
@@ -549,88 +604,107 @@ class GLGridView(QOpenGLWidget):
         glBindVertexArray(0)
 
         # --- Placed tiles (instanced — one draw call per unique mesh+LOD) ---
+        # Instance buffer is sorted: unselected first, selected last.
+        # Draw unselected normally, then selected with stencil=1 write.
+        has_selection = bool(self._selection)
         glUseProgram(self._inst_prog)
         glUniformMatrix4fv(self._u_inst_pv, 1, GL_FALSE, pv_arr)
-        for key, count in self._inst_counts.items():
-            if count == 0:
+        for key, (total, sel_count) in self._inst_counts.items():
+            if total == 0:
                 continue
             inst_vao, _inst_vbo, n_verts = self._inst_cache[key]
             glBindVertexArray(inst_vao)
-            glDrawArraysInstanced(GL_TRIANGLES, 0, n_verts, count)
+            glDrawArraysInstanced(GL_TRIANGLES, 0, n_verts, total)
         glBindVertexArray(0)
 
-        # --- Selection outline (screen-space stencil dilation) ---
-        # Back-face extrusion fails for concave models (doorways, arches) because it
-        # only produces outlines at silhouette edges.  Instead we dilate the tile's
-        # stencil mask by N pixels using 8 screen-space NDC offsets:
-        #
-        #   Pass 1 — draw tile mesh 8× (offset in 8 directions), depth test OFF
-        #            → stencil = 1 over the full dilated 2-D silhouette.
-        #   Pass 2 — draw tile mesh at exact position, depth test OFF
-        #            → stencil = 2 over the full interior, leaving stencil = 1
-        #            only on the N-pixel border ring.
-        #   Pass 3 — draw tile mesh at exact position, depth test ON, stencil == 1
-        #            → colours only the ring at the tile's natural depth so the
-        #            outline appears behind the tile surface rather than over it.
-        #
-        # Depth test is deliberately OFF in passes 1 & 2 so the stencil masks are
-        # based purely on the 2-D projected silhouette.  Any depth fighting between
-        # the outline mesh (LOD 0) and the rendered tile (potentially a higher LOD)
-        # would leave interior pixels with stencil=1 and cause blue flickering on
-        # the tile surface — disabling depth eliminates that entirely.
-        if self._selection:
-            vw = max(self.width(), 1)
-            vh = max(self.height(), 1)
-            px = 3                              # outline thickness in pixels
-            sx = 2.0 * px / vw
-            sy = 2.0 * px / vh
-            _offsets = [
-                ( sx,  0.0), (-sx,  0.0), (0.0,  sy), (0.0, -sy),
-                ( sx,  sy),  ( sx, -sy),  (-sx,  sy), (-sx, -sy),
-            ]
-
+        # --- Stencil pass for selected tiles (depth OFF, color OFF) ---
+        # Re-draws only the selected slice with no depth test so the
+        # stencil silhouette shows through occluding tiles.
+        if has_selection:
             glEnable(GL_STENCIL_TEST)
-            glDisable(GL_CULL_FACE)
-            glDisable(GL_DEPTH_TEST)
-            glDepthMask(GL_FALSE)
-            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE)
-            glUseProgram(self._outline_prog)
-
-            # Pass 1 — 8-direction dilation → stencil = 1
             glStencilFunc(GL_ALWAYS, 1, 0xFF)
             glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE)
-            for ox, oy in _offsets:
-                glUniform2f(self._u_outline_offset, ox, oy)
-                for pt in self._selection:
-                    self._draw_tile_outline(pt, proj, view)
-
-            # Pass 2 — exact position → stencil = 2 (clears interior)
-            glStencilFunc(GL_ALWAYS, 2, 0xFF)
-            glUniform2f(self._u_outline_offset, 0.0, 0.0)
-            for pt in self._selection:
-                self._draw_tile_outline(pt, proj, view)
-
-            # Pass 3 — colour the ring (stencil == 1) with a fullscreen quad.
-            # Depth test stays OFF: the ring pixels are just outside the tile edge
-            # so the tile mesh at exact position doesn't cover them — only a full-
-            # viewport draw reliably reaches every ring pixel.  The stencil=2
-            # interior mask (set reliably above without depth fighting) ensures the
-            # colour never appears on the tile surface itself.
+            glDisable(GL_DEPTH_TEST)
+            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE)
+            glDepthMask(GL_FALSE)
+            glDisable(GL_CULL_FACE)
+            # Reuse the instanced shader — inst_cache VAOs already have
+            # mesh geometry + instance data bound correctly.
+            glUseProgram(self._inst_prog)
+            glUniformMatrix4fv(self._u_inst_pv, 1, GL_FALSE, pv_arr)
+            for key, (total, sel_count) in self._inst_counts.items():
+                if sel_count == 0:
+                    continue
+                unsel_count = total - sel_count
+                inst_vao, _, n_verts = self._inst_cache[key]
+                glBindVertexArray(inst_vao)
+                glDrawArraysInstancedBaseInstance(
+                    GL_TRIANGLES, 0, n_verts, sel_count, unsel_count)
+            glBindVertexArray(0)
             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE)
+            glDepthMask(GL_TRUE)
+            glEnable(GL_DEPTH_TEST)
+            glEnable(GL_CULL_FACE)
+            glDisable(GL_STENCIL_TEST)
+
+        # --- Selection outline (screen-space edge detection on stencil) ---
+        # Selected tiles already wrote stencil=1 during the instanced draw.
+        # Step 1: blit stencil to mask texture — draw a white fullscreen quad
+        #         to the mask FBO with stencil test (pass where stencil==1).
+        # Step 2: edge-detect on the mask texture with a fullscreen quad on
+        #         the main framebuffer.
+        if has_selection:
+            vw = max(self.width(), 1)
+            vh = max(self.height(), 1)
+            self._ensure_mask_fbo(vw, vh)
+            default_fbo = self.defaultFramebufferObject()
+
+            # Step 1a — blit stencil from Qt's FBO to mask FBO
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, default_fbo)
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, self._mask_fbo)
+            glBlitFramebuffer(0, 0, vw, vh, 0, 0, vw, vh,
+                              GL_STENCIL_BUFFER_BIT, GL_NEAREST)
+
+            # Step 1b — draw stencil-tested quad to mask FBO's color attachment
+            glBindFramebuffer(GL_FRAMEBUFFER, self._mask_fbo)
+            glViewport(0, 0, vw, vh)
+            glClearColor(0.0, 0.0, 0.0, 0.0)
+            glClear(GL_COLOR_BUFFER_BIT)
+            glDisable(GL_DEPTH_TEST)
+            glEnable(GL_STENCIL_TEST)
             glStencilFunc(GL_EQUAL, 1, 0xFF)
             glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP)
             glUseProgram(self._flat_prog)
             glUniformMatrix4fv(self._u_flat_mvp, 1, GL_FALSE,
                                np.eye(4, dtype=np.float32))
-            glUniform4f(self._u_flat_col, 0.0, 0.47, 0.83, 1.0)  # #0078D4
+            glUniform4f(self._u_flat_col, 1.0, 1.0, 1.0, 1.0)
             glBindVertexArray(self._quad_vao)
             glDrawArrays(GL_TRIANGLES, 0, 6)
             glBindVertexArray(0)
-
-            glEnable(GL_DEPTH_TEST)
-            glEnable(GL_CULL_FACE)
-            glDepthMask(GL_TRUE)
             glDisable(GL_STENCIL_TEST)
+
+            # Restore main framebuffer
+            glBindFramebuffer(GL_FRAMEBUFFER, default_fbo)
+            glViewport(0, 0, vw, vh)
+            glClearColor(*self._bg, 1.0)
+
+            # Step 2 — edge detection fullscreen quad
+            glDisable(GL_DEPTH_TEST)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glUseProgram(self._edge_prog)
+            glActiveTexture(GL_TEXTURE0)
+            glBindTexture(GL_TEXTURE_2D, self._mask_tex)
+            glUniform1i(self._u_edge_mask, 0)
+            glUniform2f(self._u_edge_px, 1.0 / vw, 1.0 / vh)
+            glUniform4f(self._u_edge_color, 0.0, 0.47, 0.83, 1.0)
+            glUniform1f(self._u_edge_thick, 2.0)
+            glBindVertexArray(self._quad_vao)
+            glDrawArrays(GL_TRIANGLES, 0, 6)
+            glBindVertexArray(0)
+            glBindTexture(GL_TEXTURE_2D, 0)
+            glDisable(GL_BLEND)
+            glEnable(GL_DEPTH_TEST)
 
         # --- Ghost draws (move, paste, placement) — disable culling so semi-transparent
         #     tiles are visible from all angles regardless of winding ---
@@ -703,9 +777,9 @@ class GLGridView(QOpenGLWidget):
                 x0, y0, 0,  x1, y0, 0,  x1, y1, 0,
                 x0, y0, 0,  x1, y1, 0,  x0, y1, 0,
             ], dtype=np.float32)
-            glBindVertexArray(self._sel_vao)
-            glBindBuffer(GL_ARRAY_BUFFER, self._sel_vbo)
-            glBufferData(GL_ARRAY_BUFFER, fill.nbytes, fill, GL_STATIC_DRAW)
+            glBindVertexArray(self._overlay_vao)
+            glBindBuffer(GL_ARRAY_BUFFER, self._overlay_vbo)
+            glBufferData(GL_ARRAY_BUFFER, fill.nbytes, fill, GL_DYNAMIC_DRAW)
             glUniform4f(self._u_flat_col, 0.0, 0.47, 0.83, 0.12)
             glDrawArrays(GL_TRIANGLES, 0, 6)
 
@@ -713,7 +787,7 @@ class GLGridView(QOpenGLWidget):
             border = np.array([
                 x0, y0, 0,  x1, y0, 0,  x1, y1, 0,  x0, y1, 0,
             ], dtype=np.float32)
-            glBufferData(GL_ARRAY_BUFFER, border.nbytes, border, GL_STATIC_DRAW)
+            glBufferData(GL_ARRAY_BUFFER, border.nbytes, border, GL_DYNAMIC_DRAW)
             glUniform4f(self._u_flat_col, 0.0, 0.47, 0.83, 0.9)
             glDrawArrays(GL_LINE_LOOP, 0, 4)
             glBindVertexArray(0)
@@ -763,35 +837,6 @@ class GLGridView(QOpenGLWidget):
         glUniform3f(self._u_ns,   *ns)
         glUniform3f(self._u_col,  defn.color.redF(), defn.color.greenF(), defn.color.blueF())
         glUniform1f(self._u_alpha, alpha)
-
-        glBindVertexArray(vao)
-        glDrawArrays(GL_TRIANGLES, 0, n_verts)
-        glBindVertexArray(0)
-
-    def _draw_tile_outline(self, pt: PlacedTile, proj: QMatrix4x4,
-                           view: QMatrix4x4) -> None:
-        """Draw the tile mesh into the stencil buffer at its exact world position.
-
-        The caller sets uNDCOffset before each directional pass so the vertex
-        shader displaces the projected vertices in screen space without touching
-        world or model coordinates.
-        """
-        defn = pt.definition
-        key  = (defn.stl_path, 0)
-        if key not in self._mesh_cache:
-            return
-        vao, _vbo, n_verts = self._mesh_cache[key]
-
-        model = QMatrix4x4()
-        model.translate(float(pt.grid_x), float(pt.grid_y), pt.z_offset)
-        model.scale(float(pt.effective_w), float(pt.effective_h), float(defn.grid_z))
-        if pt.rotation != 0:
-            model.translate(0.5, 0.5, 0.0)
-            model.rotate(float(pt.rotation), 0.0, 0.0, 1.0)
-            model.translate(-0.5, -0.5, 0.0)
-
-        mvp_arr = np.array((proj * view * model).data(), dtype=np.float32)
-        glUniformMatrix4fv(self._u_outline_mvp, 1, GL_FALSE, mvp_arr)
 
         glBindVertexArray(vao)
         glDrawArrays(GL_TRIANGLES, 0, n_verts)
@@ -889,9 +934,9 @@ class GLGridView(QOpenGLWidget):
             x + w, y + h, z,
             x,     y + h, z,
         ], dtype=np.float32)
-        glBindVertexArray(self._sel_vao)
-        glBindBuffer(GL_ARRAY_BUFFER, self._sel_vbo)
-        glBufferData(GL_ARRAY_BUFFER, verts.nbytes, verts, GL_STATIC_DRAW)
+        glBindVertexArray(self._overlay_vao)
+        glBindBuffer(GL_ARRAY_BUFFER, self._overlay_vbo)
+        glBufferData(GL_ARRAY_BUFFER, verts.nbytes, verts, GL_DYNAMIC_DRAW)
         glUniform4f(self._u_flat_col, *rgba)
         glDrawArrays(GL_TRIANGLES, 0, 6)
         glBindVertexArray(0)
@@ -1070,23 +1115,31 @@ class GLGridView(QOpenGLWidget):
             if key not in groups:
                 groups[key] = []
             col = pt.definition.color
+            is_sel = pt in self._selection
             groups[key].append((
                 float(t_gx[i]), float(t_gy[i]), float(t_gzo[i]),
                 math.radians(pt.rotation),
                 float(t_ew[i]), float(t_eh[i]), float(t_gz[i]),
                 col.redF(), col.greenF(), col.blueF(), 1.0,
+                is_sel,
             ))
 
-        # Upload each group and record instance counts for the draw loop
-        self._inst_counts: Dict[Tuple[str, int], int] = {}
+        # Upload each group: unselected instances first, selected last.
+        # Record (total_count, selected_count) so paintGL can split the draw.
+        self._inst_counts: Dict[Tuple[str, int], Tuple[int, int]] = {}
         for key, instances in groups.items():
+            # Sort: unselected (False=0) first, selected (True=1) last
+            instances.sort(key=lambda x: x[-1])
+            sel_count = sum(1 for x in instances if x[-1])
+            # Strip the is_sel flag before uploading (11 floats per instance)
+            stripped = [x[:11] for x in instances]
             inst_vao, inst_vbo, _n = self._inst_cache[key]
-            data = np.array(instances, dtype=np.float32)
+            data = np.array(stripped, dtype=np.float32)
             glBindVertexArray(inst_vao)
             glBindBuffer(GL_ARRAY_BUFFER, inst_vbo)
             glBufferData(GL_ARRAY_BUFFER, data.nbytes, data, GL_DYNAMIC_DRAW)
             glBindVertexArray(0)
-            self._inst_counts[key] = len(instances)
+            self._inst_counts[key] = (len(instances), sel_count)
 
     def _build_static_geometry(self) -> None:
         """Build ground plane and grid line geometry."""

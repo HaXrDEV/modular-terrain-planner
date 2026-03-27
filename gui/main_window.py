@@ -275,8 +275,7 @@ class MainWindow(QMainWindow):
         self._view.set_ortho_mode(checked)
 
     def _on_toggle_ortho_proj(self, checked: bool) -> None:
-        self._view._ortho_proj = checked
-        self._view.update()
+        self._view.set_ortho_proj(checked)
 
     def _on_toggle_lod(self, checked: bool) -> None:
         self._view.lod_disabled = checked
@@ -531,7 +530,7 @@ class MainWindow(QMainWindow):
         self._update_undo_actions()
         # Rebuild palette (clear all tabs) and GL cache
         self._palette.clear_all_tabs()
-        self._view._selection.clear()
+        self._view.clear_selection()
         self._view.load_definitions([])
         self._view.clear_ground_image()
         self._update_title()
@@ -666,18 +665,18 @@ class MainWindow(QMainWindow):
     def _on_tile_removed(self, tile) -> None:
         self._snapshot()
         self._model.remove_tile(tile)
-        self._view._selection.discard(tile)
+        self._view.discard_from_selection(tile)
         self._view.refresh()
         self._mark_dirty()
         self._update_status()
 
     def _on_selection_delete(self) -> None:
-        if not self._view._selection:
+        if not self._view.has_selection():
             return
         self._snapshot()
-        for tile in list(self._view._selection):
+        for tile in list(self._view.selected_tiles()):
             self._model.remove_tile(tile)
-        self._view._selection.clear()
+        self._view.clear_selection()
         self._view.refresh()
         self._mark_dirty()
         self._update_status()
@@ -693,18 +692,20 @@ class MainWindow(QMainWindow):
             self._model.force_place(new_tile)
             new_tiles.append(new_tile)
         # Update selection to the newly created PlacedTile objects
-        self._view._selection = set(new_tiles)
+        self._view.set_selection(set(new_tiles))
         self._view.refresh()
         self._mark_dirty()
         self._update_status()
 
     def _on_copy(self) -> None:
-        selection = list(self._view._selection)
+        selection = list(self._view.selected_tiles())
         if not selection:
             return
-        # Store positions relative to the group centroid
-        cx = sum(t.grid_x + t.effective_w / 2.0 for t in selection) / len(selection)
-        cy = sum(t.grid_y + t.effective_h / 2.0 for t in selection) / len(selection)
+        # Store positions relative to the group centroid.
+        # Floor the centroid so relative offsets are always integers for
+        # grid-snapped tiles — prevents pasted tiles landing between grid lines.
+        cx = math.floor(sum(t.grid_x + t.effective_w / 2.0 for t in selection) / len(selection))
+        cy = math.floor(sum(t.grid_y + t.effective_h / 2.0 for t in selection) / len(selection))
         min_z = min(t.z_offset for t in selection)
         self._clipboard = [
             (t.definition, t.grid_x - cx, t.grid_y - cy, t.rotation, t.z_offset - min_z)
@@ -719,7 +720,7 @@ class MainWindow(QMainWindow):
 
     def _on_paste_place(self, cx: float, cy: float) -> None:
         """Called when the user left-clicks during paste ghost mode."""
-        paste_buf = self._view._paste_buffer
+        paste_buf = self._view.paste_buffer()
         if not paste_buf:
             self._view.set_paste_buffer(None)
             return
@@ -731,7 +732,7 @@ class MainWindow(QMainWindow):
             new_tile = PlacedTile(defn, new_gx, new_gy, rotation, rel_z)
             self._model.force_place(new_tile)
             new_tiles.append(new_tile)
-        self._view._selection = set(new_tiles)
+        self._view.set_selection(set(new_tiles))
         # Keep paste mode active, preserving any rotation applied since Ctrl+V
         self._view.set_paste_buffer(list(paste_buf))
         self._view.refresh()
@@ -740,7 +741,7 @@ class MainWindow(QMainWindow):
 
     def _on_selection_rotate(self) -> None:
         self._snapshot()
-        selection = list(self._view._selection)
+        selection = list(self._view.selected_tiles())
 
         # Group centroid (average of each tile's centre)
         group_cx = sum(t.grid_x + t.effective_w / 2.0 for t in selection) / len(selection)
@@ -765,12 +766,9 @@ class MainWindow(QMainWindow):
             self._model.force_place(new_tile)
             new_tiles.append(new_tile)
 
-        self._view._selection = set(new_tiles)
+        self._view.set_selection(set(new_tiles))
         # Snap offsets reference the old tile objects — cancel any in-progress drag
-        self._view._move_world_start = None
-        self._view._move_snap_offsets.clear()
-        self._view._move_dragging = False
-        self._view._move_delta = (0.0, 0.0)
+        self._view.cancel_move()
         self._view.refresh()
         self._mark_dirty()
         self._update_status()

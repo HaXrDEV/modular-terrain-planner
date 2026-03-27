@@ -72,7 +72,7 @@ from gui.gl_helpers import (
     INST_VERT as _INST_VERT, INST_FRAG as _INST_FRAG,
     EDGE_VERT as _EDGE_VERT, EDGE_FRAG as _EDGE_FRAG,
     build_vdata as _build_vdata, upload_geometry as _upload_geometry,
-    build_program as _build_program_fn, compile_shader as _compile_fn,
+    build_program as _build_program_fn,
 )
 
 # ---------------------------------------------------------------------------
@@ -326,6 +326,40 @@ class GLGridView(QOpenGLWidget):
         self._paste_buffer = buf
         self.update()
 
+    def selected_tiles(self) -> set:
+        """Return a copy of the current selection set."""
+        return set(self._selection)
+
+    def set_selection(self, tiles: set) -> None:
+        """Replace the selection with *tiles* and refresh."""
+        self._selection = set(tiles)
+        self.update()
+
+    def clear_selection(self) -> None:
+        """Clear the selection and refresh."""
+        self._selection.clear()
+        self.update()
+
+    def discard_from_selection(self, tile) -> None:
+        """Remove *tile* from the selection if present."""
+        self._selection.discard(tile)
+
+    def has_selection(self) -> bool:
+        """Return True if any tiles are selected."""
+        return bool(self._selection)
+
+    def cancel_move(self) -> None:
+        """Cancel any in-progress drag move, resetting move state."""
+        self._move_world_start = None
+        self._move_snap_offsets.clear()
+        self._move_rotations.clear()
+        self._move_dragging = False
+        self._move_delta = (0.0, 0.0)
+
+    def paste_buffer(self) -> list:
+        """Return the current paste buffer, or None."""
+        return self._paste_buffer
+
     def refresh(self) -> None:
         self.update()
 
@@ -438,11 +472,11 @@ class GLGridView(QOpenGLWidget):
             QMessageBox.critical(self, "OpenGL error", "PyOpenGL is not installed.\nRun launch.bat to install dependencies.")
             return
         try:
-            self._mesh_prog    = self._build_program(_MESH_VERT,    _MESH_FRAG)
-            self._flat_prog    = self._build_program(_FLAT_VERT,    _FLAT_FRAG)
-            self._tex_prog     = self._build_program(_TEX_VERT,     _TEX_FRAG)
-            self._inst_prog    = self._build_program(_INST_VERT,    _INST_FRAG)
-            self._edge_prog    = self._build_program(_EDGE_VERT,    _EDGE_FRAG)
+            self._mesh_prog    = _build_program_fn(_MESH_VERT,    _MESH_FRAG)
+            self._flat_prog    = _build_program_fn(_FLAT_VERT,    _FLAT_FRAG)
+            self._tex_prog     = _build_program_fn(_TEX_VERT,     _TEX_FRAG)
+            self._inst_prog    = _build_program_fn(_INST_VERT,    _INST_FRAG)
+            self._edge_prog    = _build_program_fn(_EDGE_VERT,    _EDGE_FRAG)
             # Uniform locations — mesh (per-draw, used for ghosts)
             p = self._mesh_prog
             self._u_mvp   = glGetUniformLocation(p, b"uMVP")
@@ -815,18 +849,10 @@ class GLGridView(QOpenGLWidget):
 
         vao, _vbo, n_verts = self._mesh_cache[key]
 
+        model = pt.model_matrix()
         ew = float(pt.effective_w)
         eh = float(pt.effective_h)
         gz = float(defn.grid_z)
-
-        # Model = translate to grid cell, scale to tile proportions, rotate in-place
-        model = QMatrix4x4()
-        model.translate(float(pt.grid_x), float(pt.grid_y), pt.z_offset)
-        model.scale(ew, eh, gz)
-        if pt.rotation != 0:
-            model.translate(0.5, 0.5, 0.0)
-            model.rotate(float(pt.rotation), 0.0, 0.0, 1.0)
-            model.translate(-0.5, -0.5, 0.0)
 
         mvp = proj * view * model
         mvp_arr = np.array(mvp.data(), dtype=np.float32)
@@ -1221,6 +1247,10 @@ class GLGridView(QOpenGLWidget):
         self._ortho_mode = enabled
         self.update()
 
+    def set_ortho_proj(self, enabled: bool) -> None:
+        self._ortho_proj = enabled
+        self.update()
+
     def _reset_camera(self) -> None:
         cx = self._model.GRID_COLS / 2.0
         cy = self._model.GRID_ROWS / 2.0
@@ -1276,19 +1306,7 @@ class GLGridView(QOpenGLWidget):
         The overlap test is conservative: tiles whose projected AABB touches the selection
         rect are included even if the mesh itself doesn't reach that corner.
         """
-        ew = float(pt.effective_w)
-        eh = float(pt.effective_h)
-        gz = float(pt.definition.grid_z)
-
-        model_mat = QMatrix4x4()
-        model_mat.translate(float(pt.grid_x), float(pt.grid_y), pt.z_offset)
-        model_mat.scale(ew, eh, gz)
-        if pt.rotation != 0:
-            model_mat.translate(0.5, 0.5, 0.0)
-            model_mat.rotate(float(pt.rotation), 0.0, 0.0, 1.0)
-            model_mat.translate(-0.5, -0.5, 0.0)
-
-        model_np = np.array(model_mat.data(), dtype=np.float32).reshape(4, 4)
+        model_np = np.array(pt.model_matrix().data(), dtype=np.float32).reshape(4, 4)
         mvp_np   = model_np @ pv_np
 
         # 8 corners of the unit cube [0,1]³ in tile local space
@@ -1346,19 +1364,7 @@ class GLGridView(QOpenGLWidget):
             if defn.view_triangles is None or len(defn.view_triangles) == 0:
                 continue
 
-            ew = float(pt.effective_w)
-            eh = float(pt.effective_h)
-            gz = float(defn.grid_z)
-
-            # Reconstruct the same model matrix used in _draw_tile
-            model_mat = QMatrix4x4()
-            model_mat.translate(float(pt.grid_x), float(pt.grid_y), pt.z_offset)
-            model_mat.scale(ew, eh, gz)
-            if pt.rotation != 0:
-                model_mat.translate(0.5, 0.5, 0.0)
-                model_mat.rotate(float(pt.rotation), 0.0, 0.0, 1.0)
-                model_mat.translate(-0.5, -0.5, 0.0)
-
+            model_mat = pt.model_matrix()
             inv_model, ok = model_mat.inverted()
             if not ok:
                 continue
@@ -1737,13 +1743,3 @@ class GLGridView(QOpenGLWidget):
 
         self.update()
 
-    # ------------------------------------------------------------------
-    # Shader compilation
-    # ------------------------------------------------------------------
-
-    def _build_program(self, vert_src: str, frag_src: str) -> int:
-        return _build_program_fn(vert_src, frag_src)
-
-    @staticmethod
-    def _compile(src: str, kind: int) -> int:
-        return _compile_fn(src, kind)

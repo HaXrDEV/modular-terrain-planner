@@ -38,3 +38,20 @@ class PlacedTile:
             for dx in range(self.effective_w):
                 cells.append((x0 + dx, y0 + dy))
         return cells
+
+    def model_matrix(self) -> "QMatrix4x4":
+        """Build the OpenGL model matrix: translate → scale → rotate around tile centre.
+
+        Returns a QMatrix4x4 suitable for use as the model transform in all
+        rendering and picking code paths.
+        """
+        from PyQt5.QtGui import QMatrix4x4
+        m = QMatrix4x4()
+        m.translate(float(self.grid_x), float(self.grid_y), self.z_offset)
+        m.scale(float(self.effective_w), float(self.effective_h),
+                float(self.definition.grid_z))
+        if self.rotation != 0:
+            m.translate(0.5, 0.5, 0.0)
+            m.rotate(float(self.rotation), 0.0, 0.0, 1.0)
+            m.translate(-0.5, -0.5, 0.0)
+        return m

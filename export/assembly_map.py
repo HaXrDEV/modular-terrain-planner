@@ -110,14 +110,49 @@ def _draw_rotation_arrow(
 # Map image renderer (shared by PNG and PDF exports)
 # ---------------------------------------------------------------------------
 
+def _tile_bounds(
+    placed_with_ids: List[Tuple["PlacedTile", int]],
+    grid_cols: int, grid_rows: int,
+) -> Tuple[int, int, int, int]:
+    """Return (min_col, min_row, max_col, max_row) bounding all placed tiles.
+
+    The range is clamped to the grid and padded by 1 cell for context.
+    """
+    _PAD = 1
+    min_c = grid_cols
+    min_r = grid_rows
+    max_c = 0
+    max_r = 0
+    for pt, _ in placed_with_ids:
+        x0 = math.floor(pt.grid_x)
+        y0 = math.floor(pt.grid_y)
+        min_c = min(min_c, x0)
+        min_r = min(min_r, y0)
+        max_c = max(max_c, x0 + pt.effective_w)
+        max_r = max(max_r, y0 + pt.effective_h)
+    # Pad and clamp
+    min_c = max(0, min_c - _PAD)
+    min_r = max(0, min_r - _PAD)
+    max_c = min(grid_cols, max_c + _PAD)
+    max_r = min(grid_rows, max_r + _PAD)
+    return min_c, min_r, max_c, max_r
+
+
 def _render_map_image(
     grid_model: "GridModel",
     placed_with_ids: List[Tuple["PlacedTile", int]],
     title: str,
 ) -> QImage:
     """Render the assembly map and return it as a QImage."""
-    cpx = _cell_px(grid_model.GRID_COLS, grid_model.GRID_ROWS)
-    cols, rows = grid_model.GRID_COLS, grid_model.GRID_ROWS
+    full_cols, full_rows = grid_model.GRID_COLS, grid_model.GRID_ROWS
+    cpx = _cell_px(full_cols, full_rows)
+
+    # Crop to the bounding box of placed tiles
+    min_c, min_r, max_c, max_r = _tile_bounds(
+        placed_with_ids, full_cols, full_rows)
+    cols = max_c - min_c
+    rows = max_r - min_r
+
     grid_w = cols * cpx
     grid_h = rows * cpx
     img_w = _MARGIN_PX + grid_w + _LEGEND_W_PX
@@ -148,7 +183,7 @@ def _render_map_image(
         y = grid_top + r * cpx
         p.drawLine(grid_left, y, grid_left + grid_w, y)
 
-    # ---- Axis labels ----
+    # ---- Axis labels (in original grid coordinates) ----
     axis_font = QFont("Segoe UI", max(6, cpx // 5))
     p.setFont(axis_font)
     p.setPen(QPen(QColor(100, 100, 100)))
@@ -158,19 +193,19 @@ def _render_map_image(
     for c in range(0, cols, x_step):
         x = grid_left + c * cpx + cpx // 2
         p.drawText(QRectF(x - 20, grid_top - fm.height() - 2, 40, fm.height()),
-                    Qt.AlignCenter, str(c))
+                    Qt.AlignCenter, str(c + min_c))
     for r in range(0, rows, y_step):
         y = grid_top + r * cpx + cpx // 2
         p.drawText(QRectF(grid_left - 46, y - fm.height() // 2, 42, fm.height()),
-                    Qt.AlignRight | Qt.AlignVCenter, str(r))
+                    Qt.AlignRight | Qt.AlignVCenter, str(r + min_r))
 
     # ---- Tile rectangles (sorted by z_offset so top tiles paint last) ----
     tile_font = QFont("Segoe UI", max(6, cpx // 5), QFont.Bold)
     name_font = QFont("Segoe UI", max(5, cpx // 6))
 
     for pt, tid in sorted(placed_with_ids, key=lambda t: t[0].z_offset):
-        rx = grid_left + pt.grid_x * cpx
-        ry = grid_top + pt.grid_y * cpx
+        rx = grid_left + (pt.grid_x - min_c) * cpx
+        ry = grid_top + (pt.grid_y - min_r) * cpx
         rw = pt.effective_w * cpx
         rh = pt.effective_h * cpx
         tile_rect = QRectF(rx, ry, rw, rh)

@@ -31,10 +31,10 @@ Download `DungeonDesigner.exe` from the [latest release](../../releases/latest) 
 Requires Python 3.9+ and the following dependencies (installed automatically by `launch.bat`):
 
 ```text
-PyQt5 >= 5.15
-numpy-stl >= 3.0
-numpy >= 1.24
-PyOpenGL >= 3.1
+PyQt5 >= 5.15, < 6
+numpy-stl >= 3.0, < 4
+numpy >= 1.24, < 3
+PyOpenGL >= 3.1, < 4
 ```
 
 **Windows** — double-click **`launch.bat`**. It will:

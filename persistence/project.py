@@ -9,9 +9,31 @@ On load, folders are re-scanned from disk and tiles are re-placed by
 looking up each stl_path in the rebuilt definition map.
 """
 import json
+from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
 PROJECT_VERSION = 4
+
+
+# ------------------------------------------------------------------
+# Typed data structures for project contents
+# ------------------------------------------------------------------
+
+@dataclass
+class TileRecord:
+    """A single placed tile as stored in the project file."""
+    stl_path: str
+    grid_x: float
+    grid_y: float
+    rotation: int
+    z_offset: float = 0.0
+
+
+@dataclass
+class GroundImageRecord:
+    """Ground image overlay as stored in the project file."""
+    path: str
+    rect: List[float]      # [x, y, w, h]
 
 # ------------------------------------------------------------------
 # Version migration
@@ -101,15 +123,14 @@ def save_project(
 # Load
 # ------------------------------------------------------------------
 
-def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]], int, int, Optional[Dict[str, Any]]]:
+def load_project(path: str) -> Tuple[List[str], List[TileRecord], int, int, Optional[GroundImageRecord]]:
     """
     Read a project file and return
     ``(folders, tile_records, grid_cols, grid_rows, ground_image)``.
 
     ``folders`` is the ordered list of STL folder paths.
-    ``tile_records`` is a list of dicts with keys:
-        stl_path, grid_x, grid_y, rotation, z_offset
-    ``ground_image`` is None or {"path": str, "rect": [x, y, w, h]}.
+    ``tile_records`` is a list of TileRecord dataclasses.
+    ``ground_image`` is None or a GroundImageRecord dataclass.
     Raises ValueError / OSError on corrupt or missing files.
     """
     with open(path, encoding="utf-8") as fh:
@@ -124,21 +145,21 @@ def load_project(path: str) -> Tuple[List[str], List[Dict[str, Any]], int, int, 
     grid_cols = int(data.get("grid_cols", 40))
     grid_rows = int(data.get("grid_rows", 40))
     folders = [str(f) for f in data.get("folders", [])]
-    tiles   = [
-        {
-            "stl_path": str(t["stl_path"]),
-            "grid_x":   float(t["grid_x"]),
-            "grid_y":   float(t["grid_y"]),
-            "rotation": int(t["rotation"]),
-            "z_offset": float(t.get("z_offset", 0.0)),
-        }
+    tiles = [
+        TileRecord(
+            stl_path=str(t["stl_path"]),
+            grid_x=float(t["grid_x"]),
+            grid_y=float(t["grid_y"]),
+            rotation=int(t["rotation"]),
+            z_offset=float(t.get("z_offset", 0.0)),
+        )
         for t in data.get("tiles", [])
     ]
     gi_raw = data.get("ground_image")
-    ground_image: Optional[Dict[str, Any]] = None
+    ground_image: Optional[GroundImageRecord] = None
     if isinstance(gi_raw, dict) and "path" in gi_raw and "rect" in gi_raw:
-        ground_image = {
-            "path": str(gi_raw["path"]),
-            "rect": [float(v) for v in gi_raw["rect"]],
-        }
+        ground_image = GroundImageRecord(
+            path=str(gi_raw["path"]),
+            rect=[float(v) for v in gi_raw["rect"]],
+        )
     return folders, tiles, grid_cols, grid_rows, ground_image

@@ -19,7 +19,7 @@ from stl_loader.worker import STLLoaderWorker
 from export.csv_exporter import export_to_csv
 from export.assembly_map import export_assembly_map, export_assembly_pdf
 from persistence.settings import AppSettings
-from persistence.project import save_project, load_project
+from persistence.project import save_project, load_project, TileRecord, GroundImageRecord
 from gui.gl_grid_view import GLGridView
 from gui.palette_panel import PalettePanel
 from gui.missing_folders_dialog import MissingFoldersDialog
@@ -389,9 +389,9 @@ class MainWindow(QMainWindow):
             self._loading_workers.remove(worker)
         worker.deleteLater()
 
-    def _apply_project(self, folders: list, tile_records: list,
+    def _apply_project(self, folders: List[str], tile_records: List[TileRecord],
                        grid_cols: int = 40, grid_rows: int = 40,
-                       ground_image=None) -> None:
+                       ground_image: Optional[GroundImageRecord] = None) -> None:
         """
         Clear the current session and apply a loaded project.
         Missing folders or unresolvable stl_paths are skipped with a warning.
@@ -421,7 +421,7 @@ class MainWindow(QMainWindow):
 
         missing_tiles: list = []
         for rec in tile_records:
-            stl_path = rec["stl_path"]
+            stl_path = rec.stl_path
             for old, new in remapping.items():
                 if stl_path.startswith(old):
                     stl_path = new + stl_path[len(old):]
@@ -432,10 +432,10 @@ class MainWindow(QMainWindow):
                 continue
             pt = PlacedTile(
                 definition=defn,
-                grid_x=rec["grid_x"],
-                grid_y=rec["grid_y"],
-                rotation=rec["rotation"],
-                z_offset=rec["z_offset"],
+                grid_x=rec.grid_x,
+                grid_y=rec.grid_y,
+                rotation=rec.rotation,
+                z_offset=rec.z_offset,
             )
             self._model.place(pt)
 
@@ -443,10 +443,10 @@ class MainWindow(QMainWindow):
         self._update_status()
 
         # Restore ground image
-        if ground_image and os.path.isfile(ground_image["path"]):
-            rect = ground_image["rect"]
-            self._view.set_ground_image(ground_image["path"], rect)
-            self._ground_image = (ground_image["path"], rect)
+        if ground_image and os.path.isfile(ground_image.path):
+            rect = ground_image.rect
+            self._view.set_ground_image(ground_image.path, rect)
+            self._ground_image = (ground_image.path, rect)
             self._ground_image_aspect = rect[2] / max(rect[3], 1e-6)
             self._show_img_toolbar(rect)
         else:

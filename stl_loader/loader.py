@@ -1,4 +1,5 @@
 import glob
+import logging
 import math
 import os
 from typing import List, Tuple
@@ -6,6 +7,8 @@ from typing import List, Tuple
 import numpy as np
 
 from models.tile_definition import TileDefinition
+
+logger = logging.getLogger(__name__)
 
 
 def mm_to_cells(mm: float) -> int:
@@ -229,7 +232,7 @@ def load_stl_folder(folder_path: str, errors: List[str] = None) -> List[TileDefi
             if errors is not None:
                 errors.append(msg)
             else:
-                print(f"[STL loader] Skipping '{msg}'")
+                logger.warning("Skipping '%s'", msg)
             continue
 
         color = TileDefinition.color_for_name(name)

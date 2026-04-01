@@ -15,8 +15,11 @@ Delete key          Remove tile at last hovered cell
 Home key            Reset camera to default position
 """
 import ctypes
+import logging
 import math
 from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 from PyQt5.QtCore import Qt, QPoint, QTimer, pyqtSignal
@@ -400,7 +403,7 @@ class GLGridView(QOpenGLWidget):
     def _on_ground_image_failed(self, path: str, error: str) -> None:
         """Called on the main thread when GroundImageWorker cannot load the image."""
         if path == self._pending_ground_path:
-            print(f"[GroundImageWorker] Failed to load '{path}': {error}")
+            logger.error("Failed to load ground image '%s': %s", path, error)
 
     def clear_ground_image(self) -> None:
         """Remove the ground image texture."""
@@ -614,7 +617,7 @@ class GLGridView(QOpenGLWidget):
                                   GL_RENDERBUFFER, self._mask_rbo)
         status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         if status != GL_FRAMEBUFFER_COMPLETE:
-            print(f"WARNING: Selection mask FBO incomplete: {status}")
+            logger.warning("Selection mask FBO incomplete: %s", status)
         glBindFramebuffer(GL_FRAMEBUFFER,
                           self.defaultFramebufferObject())
         glBindTexture(GL_TEXTURE_2D, 0)

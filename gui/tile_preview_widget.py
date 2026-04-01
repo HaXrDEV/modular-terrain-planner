@@ -4,10 +4,13 @@ Standalone 3D tile preview widget embedded in the palette panel.
 Shows the selected TileDefinition rendered with the same shaders as the main
 grid view. Left-drag orbits the camera; scroll wheel zooms.
 """
+import logging
 import math
 from typing import Optional, Tuple
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QMatrix4x4, QVector3D
 from PyQt5.QtWidgets import QOpenGLWidget
@@ -114,7 +117,7 @@ class TilePreviewWidget(QOpenGLWidget):
                 self._pending_upload = False
 
         except RuntimeError as exc:
-            print(f"[TilePreviewWidget] GL init error: {exc}")
+            logger.error("GL init error: %s", exc)
 
     def resizeGL(self, w: int, h: int) -> None:
         glViewport(0, 0, w, h)

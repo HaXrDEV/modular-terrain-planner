@@ -1,8 +1,15 @@
 import sys
 import os
+import logging
 
 # Make sure package root is on the path when running directly
 sys.path.insert(0, os.path.dirname(__file__))
+
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(levelname)s %(name)s: %(message)s",
+    stream=sys.stderr,
+)
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QSurfaceFormat

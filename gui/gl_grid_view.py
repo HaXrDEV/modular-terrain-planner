@@ -67,6 +67,8 @@ except ImportError:
 from models.grid_model import GridModel
 from models.placed_tile import PlacedTile
 from models.tile_definition import TileDefinition
+from gui.camera_controller import CameraController
+from gui.ground_image_worker import GroundImageWorker
 from gui.gl_helpers import (
     MESH_VERT as _MESH_VERT, MESH_FRAG as _MESH_FRAG,
     INST_VERT as _INST_VERT, INST_FRAG as _INST_FRAG,
@@ -191,24 +193,15 @@ class GLGridView(QOpenGLWidget):
     zoom_fit_requested         = pyqtSignal()   # F key
     free_mode_changed          = pyqtSignal(bool)  # Ctrl held/released
 
-    # Camera defaults
-    _DEFAULT_AZ   = 45.0
-    _DEFAULT_EL   = 55.0
-    _DEFAULT_DIST = 56.0
-
     def __init__(self, grid_model: GridModel, parent=None) -> None:
         super().__init__(parent)
         self._model = grid_model
 
-        # Camera spherical coords
+        # Camera — all state and logic delegated to CameraController
         cx = grid_model.GRID_COLS / 2.0
         cy = grid_model.GRID_ROWS / 2.0
-        self._target   = [cx, cy, 0.0]
-        self._azimuth  = self._DEFAULT_AZ
-        self._elevation= self._DEFAULT_EL
-        self._distance = self._DEFAULT_DIST
-        self._ortho_mode = False
-        self._ortho_proj = False   # debug: ortho projection with normal orbit camera
+        self._cam = CameraController(cx, cy, parent=self)
+        self._cam.changed.connect(self.update)
 
         # Interaction
         self._last_mouse: Optional[QPoint] = None
@@ -216,13 +209,6 @@ class GLGridView(QOpenGLWidget):
         self._hover_cell: Tuple[int, int]     = (-1, -1)
         self._hover_pos:  Tuple[float, float] = (-1.0, -1.0)
         self._mouse_screen: Tuple[int, int]   = (0, 0)
-
-        # WASD smooth pan
-        self._pan_speed: float = 0.008   # cells per tick per unit of distance
-        self._pan_keys: set = set()
-        self._pan_timer = QTimer(self)
-        self._pan_timer.setInterval(16)   # ~60 fps
-        self._pan_timer.timeout.connect(self._on_pan_tick)
 
         # Image drag state (Alt + left-drag)
         self._img_dragging: bool = False
@@ -278,6 +264,7 @@ class GLGridView(QOpenGLWidget):
                                 float(grid_model.GRID_ROWS)]
         self._img_vao = self._img_vbo = self._img_n = 0
         self._u_tex_mvp = self._u_tex_rect = self._u_tex_sampler = 0
+        self._pending_ground_path: str = ""  # guards against stale worker results
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -300,7 +287,7 @@ class GLGridView(QOpenGLWidget):
         self.update()
 
     def set_pan_speed(self, speed: float) -> None:
-        self._pan_speed = speed
+        self._cam.set_pan_speed(speed)
 
     def set_background_color(self, r: float, g: float, b: float,
                              ground: tuple = None, grid: tuple = None) -> None:
@@ -373,32 +360,47 @@ class GLGridView(QOpenGLWidget):
         self.update()
 
     def set_ground_image(self, path: str, rect: list) -> None:
-        """Load an image from *path* and render it on the ground plane at *rect* (x, y, w, h)."""
+        """Start loading *path* off the main thread; upload to GPU when ready.
+
+        The image file is decoded in a GroundImageWorker (QThread) to avoid
+        blocking the UI on large battle map images. GPU upload happens in
+        _on_ground_image_loaded once the worker emits its finished signal.
+        """
         if not self._ready:
             return
+        self._img_rect = list(rect)
+        self._pending_ground_path = path
+        worker = GroundImageWorker(path, parent=self)
+        worker.finished.connect(self._on_ground_image_loaded)
+        worker.failed.connect(self._on_ground_image_failed)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        worker.start()
+
+    def _on_ground_image_loaded(self, path: str, w: int, h: int, data: bytes) -> None:
+        """GPU upload slot — called on the main thread after GroundImageWorker finishes."""
+        if path != self._pending_ground_path:
+            return  # stale result: user loaded a different image in the meantime
         self.makeCurrent()
         if self._tex_id:
             glDeleteTextures([self._tex_id])
             self._tex_id = 0
-        img = QImage(path).convertToFormat(QImage.Format_RGBA8888).mirrored(False, True)
-        if img.isNull():
-            self.doneCurrent()
-            return
-        ptr = img.bits()
-        ptr.setsize(img.byteCount())
-        data = np.frombuffer(ptr, dtype=np.uint8).copy()
+        arr = np.frombuffer(data, dtype=np.uint8)
         self._tex_id = int(glGenTextures(1))
         glBindTexture(GL_TEXTURE_2D, self._tex_id)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width(), img.height(),
-                     0, GL_RGBA, GL_UNSIGNED_BYTE, data)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, arr)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-        self._img_rect = list(rect)
         self._rebuild_image_quad()
         self.doneCurrent()
         self.update()
+
+    def _on_ground_image_failed(self, path: str, error: str) -> None:
+        """Called on the main thread when GroundImageWorker cannot load the image."""
+        if path == self._pending_ground_path:
+            print(f"[GroundImageWorker] Failed to load '{path}': {error}")
 
     def clear_ground_image(self) -> None:
         """Remove the ground image texture."""
@@ -1241,82 +1243,26 @@ class GLGridView(QOpenGLWidget):
         self._grid_vao, self._grid_vbo, self._grid_n = _upload_geometry(grid, 3)
 
     # ------------------------------------------------------------------
-    # Camera
+    # Camera — delegated to CameraController
     # ------------------------------------------------------------------
 
-    def _eye_pos(self) -> QVector3D:
-        az = math.radians(self._azimuth)
-        el = math.radians(self._elevation)
-        dx = self._distance * math.cos(el) * math.cos(az)
-        dy = self._distance * math.cos(el) * math.sin(az)
-        dz = self._distance * math.sin(el)
-        return QVector3D(
-            self._target[0] + dx,
-            self._target[1] + dy,
-            self._target[2] + dz,
-        )
-
     def _get_proj_view(self) -> Tuple[QMatrix4x4, QMatrix4x4]:
-        w, h = max(self.width(), 1), max(self.height(), 1)
-        proj = QMatrix4x4()
-        view = QMatrix4x4()
-
-        if self._ortho_mode:
-            # _distance doubles as the ortho half-height so scroll zoom works unchanged.
-            half_h = max(self._distance, 0.1)
-            half_w = half_h * (w / h)
-            proj.ortho(-half_w, half_w, -half_h, half_h, -500.0, 500.0)
-            tx, ty, tz = self._target
-            view.lookAt(
-                QVector3D(tx, ty, tz + 100.0),
-                QVector3D(tx, ty, tz),
-                QVector3D(0.0, 1.0, 0.0),   # world Y points up on screen
-            )
-        else:
-            eye = self._eye_pos()
-            view.lookAt(eye, QVector3D(*self._target), QVector3D(0.0, 0.0, 1.0))
-
-            if self._ortho_proj:
-                # Orthographic projection matched to the 45° FOV frustum at _distance.
-                # half_h = distance × tan(FOV/2) keeps apparent object size consistent
-                # with the perspective view when toggling.
-                half_h = self._distance * math.tan(math.radians(22.5))
-                half_w = half_h * (w / h)
-                proj.ortho(-half_w, half_w, -half_h, half_h, -500.0, 500.0)
-            else:
-                proj.perspective(45.0, w / h, 0.05, 500.0)
-
-        return proj, view
+        return self._cam.get_proj_view(self.width(), self.height())
 
     def zoom_to_bounds(self, min_x: float, min_y: float, max_x: float, max_y: float) -> None:
         """Frame the camera to show the given world-space bounding box."""
-        cx = (min_x + max_x) / 2.0
-        cy = (min_y + max_y) / 2.0
-        span = max(max_x - min_x, max_y - min_y, 1.0)
-        self._target = [cx, cy, 0.0]
-        if self._ortho_mode:
-            self._distance = span * 0.6
-        else:
-            fov_half = math.radians(22.5)
-            self._distance = max(4.0, min(200.0, (span / 2.0) / math.tan(fov_half) * 1.1))
-        self.update()
+        self._cam.zoom_to_bounds(min_x, min_y, max_x, max_y)
 
     def set_ortho_mode(self, enabled: bool) -> None:
-        self._ortho_mode = enabled
-        self.update()
+        self._cam.set_ortho_mode(enabled)
 
     def set_ortho_proj(self, enabled: bool) -> None:
-        self._ortho_proj = enabled
-        self.update()
+        self._cam.set_ortho_proj(enabled)
 
     def _reset_camera(self) -> None:
         cx = self._model.GRID_COLS / 2.0
         cy = self._model.GRID_ROWS / 2.0
-        self._target   = [cx, cy, 0.0]
-        self._azimuth  = self._DEFAULT_AZ
-        self._elevation= self._DEFAULT_EL
-        self._distance = self._DEFAULT_DIST
-        self.update()
+        self._cam.reset(cx, cy)
 
     # ------------------------------------------------------------------
     # Ray casting: screen → grid cell on Z=0 plane
@@ -1419,7 +1365,7 @@ class GLGridView(QOpenGLWidget):
 
         for pt in self._model.all_placed():
             defn = pt.definition
-            if defn.view_triangles is None or len(defn.view_triangles) == 0:
+            if defn.pick_triangles is None or len(defn.pick_triangles) == 0:
                 continue
 
             model_mat = pt.model_matrix()
@@ -1443,7 +1389,7 @@ class GLGridView(QOpenGLWidget):
             if not _ray_aabb(lo, ld, _zero, _one):
                 continue
 
-            t_local = _ray_triangles_min_t(lo, ld, defn.view_triangles)
+            t_local = _ray_triangles_min_t(lo, ld, defn.pick_triangles)
             if t_local is None:
                 continue
 
@@ -1566,34 +1512,14 @@ class GLGridView(QOpenGLWidget):
         self._last_mouse = event.pos()
 
         if self._drag_button == Qt.RightButton and (abs(dx) > 0 or abs(dy) > 0):
-            if self._ortho_mode:
+            if self._cam.ortho_mode:
                 # Orbit is meaningless top-down; right-drag pans instead.
-                s = self._distance * 2.0 / max(self.height(), 1)
-                self._target[0] -= dx * s
-                self._target[1] += dy * s
+                self._cam.pan_right_drag(dx, dy, self.height())
             else:
-                self._azimuth  -= dx * 0.4
-                self._elevation = max(5.0, min(88.0, self._elevation + dy * 0.4))
-            self.update()
+                self._cam.orbit(dx * 0.4, dy * 0.4)
         elif self._drag_button == Qt.MiddleButton:
-            if self._ortho_mode:
-                # fwd_flat collapses to zero at 90° elevation; use direct pixel mapping.
-                s = self._distance * 2.0 / max(self.height(), 1)
-                self._target[0] -= dx * s
-                self._target[1] += dy * s
-            else:
-                # Pan: move target in the ground plane
-                _, view = self._get_proj_view()
-                right = QVector3D(view.row(0))
-                fwd_flat = QVector3D(
-                    -math.cos(math.radians(self._elevation)) * math.cos(math.radians(self._azimuth)),
-                    -math.cos(math.radians(self._elevation)) * math.sin(math.radians(self._azimuth)),
-                    0.0,
-                )
-                pan_speed = self._distance * 0.0015
-                self._target[0] += (-right.x() * dx + fwd_flat.x() * dy) * pan_speed
-                self._target[1] += (-right.y() * dx + fwd_flat.y() * dy) * pan_speed
-            self.update()
+            _, view = self._get_proj_view()
+            self._cam.pan_middle_drag(dx, dy, self.height(), view)
         elif self._img_dragging and self._img_drag_start_world is not None:
             world = self._ray_to_world(event.x(), event.y(), 0.0)
             if world:
@@ -1711,9 +1637,7 @@ class GLGridView(QOpenGLWidget):
 
     def wheelEvent(self, event) -> None:
         delta = event.angleDelta().y()
-        factor = 0.9 if delta > 0 else 1.1
-        self._distance = max(2.0, min(200.0, self._distance * factor))
-        self.update()
+        self._cam.zoom(0.9 if delta > 0 else 1.1)
 
     def keyPressEvent(self, event) -> None:
         key = event.key()
@@ -1755,18 +1679,14 @@ class GLGridView(QOpenGLWidget):
             self.update()
         elif key in (Qt.Key_W, Qt.Key_A, Qt.Key_S, Qt.Key_D):
             if not event.isAutoRepeat():
-                self._pan_keys.add(key)
-                if not self._pan_timer.isActive():
-                    self._pan_timer.start()
+                self._cam.key_press(key)
         else:
             super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event) -> None:
         if event.key() in (Qt.Key_W, Qt.Key_A, Qt.Key_S, Qt.Key_D):
             if not event.isAutoRepeat():
-                self._pan_keys.discard(event.key())
-                if not self._pan_keys:
-                    self._pan_timer.stop()
+                self._cam.key_release(event.key())
         elif event.key() == Qt.Key_Control:
             # Switch ghost back to snapped mode immediately
             mx, my = self._mouse_screen
@@ -1778,33 +1698,4 @@ class GLGridView(QOpenGLWidget):
         else:
             super().keyReleaseEvent(event)
 
-    def _on_pan_tick(self) -> None:
-        """Called at ~60 fps while any WASD key is held; pans the camera target."""
-        speed = self._distance * self._pan_speed
-
-        if self._ortho_mode:
-            # Fixed world-axis movement aligned to screen in top-down view.
-            if Qt.Key_W in self._pan_keys: self._target[1] += speed
-            if Qt.Key_S in self._pan_keys: self._target[1] -= speed
-            if Qt.Key_A in self._pan_keys: self._target[0] -= speed
-            if Qt.Key_D in self._pan_keys: self._target[0] += speed
-        else:
-            az      = math.radians(self._azimuth)
-            right_x, right_y =  math.sin(az), -math.cos(az)
-            fwd_x,   fwd_y   = -math.cos(az), -math.sin(az)
-
-            if Qt.Key_W in self._pan_keys:
-                self._target[0] += fwd_x * speed
-                self._target[1] += fwd_y * speed
-            if Qt.Key_S in self._pan_keys:
-                self._target[0] -= fwd_x * speed
-                self._target[1] -= fwd_y * speed
-            if Qt.Key_A in self._pan_keys:
-                self._target[0] += right_x * speed
-                self._target[1] += right_y * speed
-            if Qt.Key_D in self._pan_keys:
-                self._target[0] -= right_x * speed
-                self._target[1] -= right_y * speed
-
-        self.update()
 

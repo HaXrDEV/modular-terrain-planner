@@ -27,6 +27,19 @@ class TileDefinition:
     # Used by screen-coverage LOD selection to find the closest-match tier.
     lod_tri_counts: list = field(default_factory=list, compare=False)
 
+    @property
+    def pick_triangles(self) -> np.ndarray:
+        """Coarsest-LOD mesh for ray-pick tests.
+
+        Using the lowest-detail LOD (fewest triangles) is accurate enough for
+        interactive picking — tiles are normalised to [0,1]³ so precision is
+        not a concern — and is dramatically faster than testing the full-res
+        view_triangles mesh. Falls back to view_triangles if no LOD exists.
+        """
+        if self.lod_triangles:
+            return self.lod_triangles[-1]
+        return self.view_triangles
+
     @staticmethod
     def color_for_name(name: str) -> QColor:
         hue = abs(hash(name)) % 360

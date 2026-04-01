@@ -113,7 +113,7 @@ class TilePreviewWidget(QOpenGLWidget):
                 self._rebuild_geometry()
                 self._pending_upload = False
 
-        except Exception as exc:
+        except RuntimeError as exc:
             print(f"[TilePreviewWidget] GL init error: {exc}")
 
     def resizeGL(self, w: int, h: int) -> None:

@@ -578,7 +578,7 @@ class GLGridView(QOpenGLWidget):
                 self.add_definitions(self._pending_definitions)
                 del self._pending_definitions
 
-        except Exception as exc:
+        except RuntimeError as exc:
             QMessageBox.critical(self, "OpenGL init error", str(exc))
 
     def _ensure_mask_fbo(self, w: int, h: int) -> None:

@@ -332,7 +332,7 @@ class MainWindow(QMainWindow):
         try:
             errors: list = []
             definitions = load_stl_folder(folder, errors=errors)
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             return
         if not definitions:
             return
@@ -615,7 +615,7 @@ class MainWindow(QMainWindow):
             return
         try:
             folders, tile_records, grid_cols, grid_rows, ground_image = load_project(path)
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Open failed", str(exc))
             return
         self._apply_project(folders, tile_records, grid_cols, grid_rows, ground_image)
@@ -647,7 +647,7 @@ class MainWindow(QMainWindow):
             save_project(path, folders, self._model.all_placed(),
                          self._model.GRID_COLS, self._model.GRID_ROWS,
                          self._ground_image)
-        except Exception as exc:
+        except OSError as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
             return
         self._project_path = path
@@ -678,7 +678,7 @@ class MainWindow(QMainWindow):
             return
         try:
             folders, tile_records, grid_cols, grid_rows, ground_image = load_project(path)
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Open failed", str(exc))
             return
         self._apply_project(folders, tile_records, grid_cols, grid_rows, ground_image)
@@ -913,7 +913,7 @@ class MainWindow(QMainWindow):
         try:
             export_to_csv(self._model, path)
             QMessageBox.information(self, "Exported", f"Saved to:\n{path}")
-        except Exception as exc:
+        except OSError as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
 
     def _on_export_assembly_map(self) -> None:
@@ -932,7 +932,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self, "Exported",
                 f"Assembly map saved:\n{png_path}")
-        except Exception as exc:
+        except (OSError, RuntimeError) as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
 
     def _on_export_assembly_pdf(self) -> None:
@@ -951,7 +951,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self, "Exported",
                 f"Build plan saved:\n{pdf_path}")
-        except Exception as exc:
+        except (OSError, RuntimeError) as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
 
     # ------------------------------------------------------------------

@@ -30,7 +30,7 @@ class STLLoaderWorker(QThread):
         try:
             errors: List[str] = []
             definitions = load_stl_folder(self._folder, errors=errors)
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             self.failed.emit(self._folder, str(exc))
             return
         if not definitions:

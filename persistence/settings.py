@@ -38,7 +38,7 @@ class AppSettings:
                 val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
                 winreg.CloseKey(key)
                 return "light" if val else "dark"
-            except Exception:
+            except (OSError, ImportError):
                 pass
         return "light"
 
@@ -56,7 +56,8 @@ class AppSettings:
                 self.pan_speed = float(data.get("pan_speed", self._DEFAULT_PAN_SPEED))
                 if "theme" in data:
                     self.theme = str(data["theme"])
-        except Exception:
+        except (OSError, ValueError):
+            # ValueError covers json.JSONDecodeError (a subclass) for corrupt files
             pass
 
     def save(self) -> None:
@@ -68,7 +69,7 @@ class AppSettings:
                     "pan_speed": self.pan_speed,
                     "theme": self.theme}
             self._FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        except Exception:
+        except OSError:
             pass
 
     # ------------------------------------------------------------------

@@ -224,7 +224,7 @@ def load_stl_folder(folder_path: str, errors: List[str] = None) -> List[TileDefi
                 for d in _LOD_DENSITY
             ]
             lod_tri_counts = [len(t) for t in lod_triangles]
-        except Exception as exc:
+        except (OSError, ValueError, ArithmeticError, RuntimeError) as exc:
             msg = f"{name}: {exc}"
             if errors is not None:
                 errors.append(msg)

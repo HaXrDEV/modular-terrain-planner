@@ -1,14 +1,21 @@
 import sys
 import os
 import logging
+from pathlib import Path
 
 # Make sure package root is on the path when running directly
 sys.path.insert(0, os.path.dirname(__file__))
 
+_LOG_DIR  = Path.home() / ".modular-terrain-planner"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.WARNING,
-    format="%(levelname)s %(name)s: %(message)s",
-    stream=sys.stderr,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stderr),
+        logging.FileHandler(_LOG_DIR / "app.log", encoding="utf-8"),
+    ],
 )
 
 from PyQt5.QtCore import Qt

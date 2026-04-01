@@ -101,7 +101,9 @@ python main.py
 │   └── loader.py            # STL parsing, bounding-box sizing, voxel decimation
 ├── gui/
 │   ├── main_window.py         # QMainWindow shell, wires palette ↔ grid view
-│   ├── gl_grid_view.py        # QOpenGLWidget: 3D scene, orbit camera, ray-casting
+│   ├── gl_grid_view.py        # QOpenGLWidget: 3D scene, ray-casting, instanced rendering
+│   ├── camera_controller.py   # Orbit camera state and input handling
+│   ├── ground_image_worker.py # Background thread for loading battle map images
 │   ├── tile_preview_widget.py # QOpenGLWidget: isolated 3D preview of selected tile
 │   ├── palette_panel.py       # Left panel: folder tabs, tile list, preview, export
 │   └── gl_helpers.py          # Shared GLSL shaders + GPU geometry utilities
@@ -109,6 +111,18 @@ python main.py
     ├── csv_exporter.py      # CSV print-list export
     └── assembly_map.py      # 2D assembly map PNG + detailed placement CSV
 ```
+
+---
+
+## Logs
+
+Warnings and errors are written to:
+
+```text
+%USERPROFILE%\.modular-terrain-planner\app.log
+```
+
+This file is created automatically on first launch and is useful for diagnosing STL load failures or OpenGL errors when running as the portable EXE (where no console is available).
 
 ---
 

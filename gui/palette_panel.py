@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPixmap, QIcon
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QListWidget, QListWidgetItem,
-    QLabel, QSizePolicy, QTabWidget,
+    QLabel, QSizePolicy, QTabWidget, QTabBar, QToolButton,
 )
 
 from models.tile_definition import TileDefinition
@@ -32,7 +32,6 @@ class PalettePanel(QWidget):
         layout.addWidget(self._load_btn)
 
         self._tabs = QTabWidget()
-        self._tabs.setTabsClosable(True)
         self._tabs.tabBar().setExpanding(False)
         self._tabs.tabBar().setUsesScrollButtons(True)
         self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
@@ -84,8 +83,29 @@ class PalettePanel(QWidget):
         idx = self._tabs.addTab(page, label)
         self._tabs.tabBar().setTabData(idx, folder)
         self._tabs.setTabToolTip(idx, folder)
+
+        btn = self._make_close_btn()
+        btn.clicked.connect(lambda checked=False, b=btn: self._close_by_button(b))
+        self._tabs.tabBar().setTabButton(idx, QTabBar.ButtonPosition.RightSide, btn)
+
         if is_first:
             self._tabs.setCurrentIndex(idx)
+
+    def _make_close_btn(self) -> QToolButton:
+        btn = QToolButton()
+        btn.setText("✕")
+        btn.setFixedSize(20, 20)
+        btn.setAutoRaise(True)
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        btn.setObjectName("tabCloseBtn")
+        return btn
+
+    def _close_by_button(self, btn: QToolButton) -> None:
+        bar = self._tabs.tabBar()
+        for i in range(bar.count()):
+            if bar.tabButton(i, QTabBar.ButtonPosition.RightSide) is btn:
+                self._on_tab_close_requested(i)
+                return
 
     def focus_folder_tab(self, folder: str) -> None:
         """Switch to the tab whose data matches *folder*."""

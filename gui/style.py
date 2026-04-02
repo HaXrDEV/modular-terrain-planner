@@ -167,17 +167,18 @@ QTabBar::tab:hover:!selected {{
     color: #1a1a1a;
     border-bottom: 2px solid #bdbdbd;
 }}
-QTabBar::close-button {{
-    image: url("{_ICONS}/tab_close.svg");
-    subcontrol-position: right;
-    width: 14px;
-    height: 14px;
+QTabBar QToolButton#tabCloseBtn {{
+    background: transparent;
+    border: none;
     border-radius: 3px;
-    margin-left: 4px;
+    color: #7a7a7a;
+    font-size: 9pt;
+    padding: 0px;
+    margin: 0px;
 }}
-QTabBar::close-button:hover {{
-    image: url("{_ICONS}/tab_close_hover.svg");
+QTabBar QToolButton#tabCloseBtn:hover {{
     background: #d9d9d9;
+    color: #1a1a1a;
 }}
 
 /* Tab bar scroll arrows (shown when tabs overflow) */
@@ -502,17 +503,18 @@ QTabBar::tab:hover:!selected {{
     color: #CCCCCC;
     border-bottom: 2px solid #2B2B2B;
 }}
-QTabBar::close-button {{
-    image: url("{_ICONS}/tab_close_dark.svg");
-    subcontrol-position: right;
-    width: 14px;
-    height: 14px;
+QTabBar QToolButton#tabCloseBtn {{
+    background: transparent;
+    border: none;
     border-radius: 3px;
-    margin-left: 4px;
+    color: #9D9D9D;
+    font-size: 9pt;
+    padding: 0px;
+    margin: 0px;
 }}
-QTabBar::close-button:hover {{
-    image: url("{_ICONS}/tab_close_dark_hover.svg");
+QTabBar QToolButton#tabCloseBtn:hover {{
     background: #3C3C3C;
+    color: #CCCCCC;
 }}
 
 /* Tab bar scroll arrows */

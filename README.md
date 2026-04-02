@@ -1,6 +1,6 @@
 # D&D STL Dungeon Designer
 
-<img src="gui/icons/app_icon.svg" width="64" alt="App Icon"/>
+![App Icon](gui/icons/app_icon.svg)
 
 A desktop tool for designing tabletop RPG dungeon layouts by placing modular terrain STL tiles on a grid — like digital Lego. When you're done, export a build plan PDF with a visual assembly map and print list so you know exactly what to print and where it goes.
 

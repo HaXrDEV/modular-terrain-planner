@@ -1,8 +1,10 @@
 # D&D STL Dungeon Designer
 
+<img src="gui/icons/app_icon.svg" width="64" alt="App Icon"/>
+
 A desktop tool for designing tabletop RPG dungeon layouts by placing modular terrain STL tiles on a grid — like digital Lego. When you're done, export a build plan PDF with a visual assembly map and print list so you know exactly what to print and where it goes.
 
-![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![PyQt5](https://img.shields.io/badge/PyQt5-5.15%2B-green) ![OpenGL](https://img.shields.io/badge/OpenGL-4.6%20Core-orange)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue) ![PySide6](https://img.shields.io/badge/PySide6-6.11%2B-green) ![OpenGL](https://img.shields.io/badge/OpenGL-4.6%20Core-orange)
 
 ![Screenshot](docs/screenshot.png)
 
@@ -24,14 +26,15 @@ A desktop tool for designing tabletop RPG dungeon layouts by placing modular ter
 
 ### Portable EXE (easiest)
 
-Download `DungeonDesigner.exe` from the [latest release](../../releases/latest) — no Python or dependencies required. Windows may show a SmartScreen warning on first run; click *More info → Run anyway*.
+Download `DungeonDesigner-<version>.exe` from the [latest release](../../releases/latest) — no Python or dependencies required. Windows may show a SmartScreen warning on first run; click *More info → Run anyway*.
 
 ### From source
 
-Requires Python 3.9+ and the following dependencies (installed automatically by `launch.bat`):
+Requires Python 3.11+ and the following dependencies (installed automatically by `launch.bat`):
 
 ```text
-PyQt5 >= 5.15, < 6
+PySide6 >= 6.11, < 7
+PySide6-Addons >= 6.11, < 7
 numpy-stl >= 3.0, < 4
 numpy >= 1.24, < 3
 PyOpenGL >= 3.1, < 4
@@ -98,18 +101,26 @@ python main.py
 │   ├── placed_tile.py       # PlacedTile (definition + grid position + rotation)
 │   └── grid_model.py        # Grid state: placement, collision, counts
 ├── stl_loader/
-│   └── loader.py            # STL parsing, bounding-box sizing, voxel decimation
+│   ├── loader.py            # STL parsing, bounding-box sizing, voxel decimation
+│   └── worker.py            # Background thread for loading STL folders
 ├── gui/
-│   ├── main_window.py         # QMainWindow shell, wires palette ↔ grid view
-│   ├── gl_grid_view.py        # QOpenGLWidget: 3D scene, ray-casting, instanced rendering
-│   ├── camera_controller.py   # Orbit camera state and input handling
-│   ├── ground_image_worker.py # Background thread for loading battle map images
-│   ├── tile_preview_widget.py # QOpenGLWidget: isolated 3D preview of selected tile
-│   ├── palette_panel.py       # Left panel: folder tabs, tile list, preview, export
-│   └── gl_helpers.py          # Shared GLSL shaders + GPU geometry utilities
-└── export/
-    ├── csv_exporter.py      # CSV print-list export
-    └── assembly_map.py      # 2D assembly map PNG + detailed placement CSV
+│   ├── main_window.py           # QMainWindow shell, wires palette ↔ grid view
+│   ├── gl_grid_view.py          # QOpenGLWidget: 3D scene, ray-casting, instanced rendering
+│   ├── camera_controller.py     # Orbit camera state and input handling
+│   ├── ground_image_worker.py   # Background thread for loading battle map images
+│   ├── tile_preview_widget.py   # QOpenGLWidget: isolated 3D preview of selected tile
+│   ├── palette_panel.py         # Left panel: folder tabs, tile list, preview, export
+│   ├── missing_folders_dialog.py # Dialog shown when project references missing STL folders
+│   ├── style.py                 # Qt stylesheets (light and dark themes)
+│   └── icons/
+│       ├── app_icon.py          # Programmatic application icon (QPainter)
+│       └── app_icon.svg         # SVG source for the application icon
+├── export/
+│   ├── csv_exporter.py      # CSV print-list export
+│   └── assembly_map.py      # 2D assembly map PNG + PDF build plan
+└── persistence/
+    ├── project.py           # Save/load .mtp project files
+    └── settings.py          # Persistent app settings (window size, theme, etc.)
 ```
 
 ---

@@ -21,6 +21,7 @@ logging.basicConfig(
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QSurfaceFormat
 from PySide6.QtWidgets import QApplication
+from gui.icons.app_icon import create_app_icon
 from gui.main_window import MainWindow
 from gui.style import WIN11_STYLESHEET
 
@@ -40,6 +41,7 @@ def main() -> None:
 
     app = QApplication(sys.argv)
     app.setApplicationName("Modular Terrain Planner")
+    app.setWindowIcon(create_app_icon())
 
     # Windows 11 system font
     font = QFont("Segoe UI", 9)

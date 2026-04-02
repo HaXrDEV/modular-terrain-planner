@@ -19,7 +19,7 @@ if not exist "%VENV%\Scripts\activate.bat" (
 
 call "%VENV%\Scripts\activate.bat"
 
-python -c "import PyQt5, stl, numpy, OpenGL" >nul 2>&1
+python -c "import PySide6, stl, numpy, OpenGL" >nul 2>&1
 if errorlevel 1 (
     echo Installing dependencies...
     pip install -r "%~dp0requirements.txt"

@@ -20,6 +20,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Extract version from tag
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -30,17 +34,17 @@ jobs:
         run: >
           pyinstaller
           --onefile
-          --noconsole
-          --name "DungeonDesigner"
-          --hidden-import PyQt5.sip
-          --hidden-import OpenGL.GL
-          --hidden-import OpenGL.GL.framebufferobjects
-          --hidden-import OpenGL.arrays.numpymodule
-          --collect-all OpenGL
+          --windowed
+          --noconfirm
+          --name "DungeonDesigner-${{ env.VERSION }}"
+          --hidden-import PySide6.QtSvg
+          --hidden-import PySide6.QtOpenGL
+          --hidden-import PySide6.QtOpenGLWidgets
+          --collect-all stl
           main.py
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/DungeonDesigner.exe
+          files: dist/DungeonDesigner-${{ env.VERSION }}.exe
           generate_release_notes: true

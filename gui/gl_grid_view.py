@@ -1402,7 +1402,7 @@ class GLGridView(QOpenGLWidget):
 
             # Convert local hit to world distance for depth sorting
             hit_local = lo + ld * t_local
-            q = model_mat * QVector4D(hit_local[0], hit_local[1], hit_local[2], 1.0)
+            q = model_mat.map(QVector4D(hit_local[0], hit_local[1], hit_local[2], 1.0))
             hit_world = np.array([q.x()/q.w(), q.y()/q.w(), q.z()/q.w()])
             world_t = float(np.dot(hit_world - near, ray_dir))
 

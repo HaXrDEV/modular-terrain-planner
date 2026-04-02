@@ -62,6 +62,7 @@ try:
         glGenRenderbuffers, glBindRenderbuffer, glRenderbufferStorage,
         glFramebufferRenderbuffer, glDeleteRenderbuffers,
         glBlitFramebuffer,
+        GL_POLYGON_OFFSET_FILL, glPolygonOffset,
     )
     _GL_OK = True
 except ImportError:
@@ -659,6 +660,8 @@ class GLGridView(QOpenGLWidget):
 
         # --- Ground image ---
         if self._tex_id and self._img_n:
+            glEnable(GL_POLYGON_OFFSET_FILL)
+            glPolygonOffset(-1.0, -1.0)
             glUseProgram(self._tex_prog)
             glUniformMatrix4fv(self._u_tex_mvp, 1, GL_FALSE, pv_arr)
             glUniform4f(self._u_tex_rect, *self._img_rect)
@@ -667,6 +670,7 @@ class GLGridView(QOpenGLWidget):
             glUniform1i(self._u_tex_sampler, 0)
             glBindVertexArray(self._img_vao)
             glDrawArrays(GL_TRIANGLES, 0, self._img_n)
+            glDisable(GL_POLYGON_OFFSET_FILL)
             glBindVertexArray(0)
             glUseProgram(self._flat_prog)
             glUniformMatrix4fv(self._u_flat_mvp, 1, GL_FALSE, pv_arr)

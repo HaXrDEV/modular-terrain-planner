@@ -1,6 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 160">
   <defs>
-<radialGradient id="torchGlow" cx="13%" cy="50%" r="30%">
+<radialGradient id="torchGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(87 80) scale(87 40)">
       <stop offset="0%"   stop-color="#c87020" stop-opacity="0.24"/>
       <stop offset="100%" stop-color="#c87020" stop-opacity="0"/>
     </radialGradient>

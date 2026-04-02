@@ -303,13 +303,45 @@ class MainWindow(QMainWindow):
     def _restore_session(self) -> None:
         """Silently reload folders from the last session."""
         missing: List[str] = []
+        present: List[str] = []
         for folder in self._settings.recent_folders:
             if os.path.isdir(folder):
-                self._load_folder_silent(folder)
+                present.append(folder)
             else:
                 missing.append(folder)
         for folder in missing:
             self._settings.remove_folder(folder)
+
+        if not present:
+            return
+
+        total = len(present)
+        progress = QProgressDialog("Restoring session…", None, 0, total, self)
+        progress.setWindowTitle("Loading")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        completed = [0]
+
+        def _folder_done(*_) -> None:
+            completed[0] += 1
+            progress.setValue(completed[0])
+            if completed[0] >= total:
+                progress.close()
+
+        def _start(folder: str) -> None:
+            w = STLLoaderWorker(folder, parent=self)
+            w.finished.connect(
+                lambda f, defs, errs: self._on_folder_loaded(f, defs, errs, silent=True))
+            w.finished.connect(_folder_done)
+            w.failed.connect(_folder_done)
+            w.finished.connect(lambda: self._cleanup_worker(w))
+            w.failed.connect(lambda: self._cleanup_worker(w))
+            self._loading_workers.append(w)
+            w.start()
+
+        for folder in present:
+            _start(folder)
 
     # ------------------------------------------------------------------
     # Project helpers

@@ -175,7 +175,8 @@ def load_tile_mesh(
     return verts.astype(np.float32)
 
 
-def load_stl_folder(folder_path: str, errors: List[str] = None) -> List[TileDefinition]:
+def load_stl_folder(folder_path: str, errors: List[str] = None,
+                    progress_cb=None) -> List[TileDefinition]:
     """
     Scan *folder_path* for .stl files (case-insensitive) and return a list of
     TileDefinition objects with bounding-box-derived grid sizes.
@@ -190,7 +191,10 @@ def load_stl_folder(folder_path: str, errors: List[str] = None) -> List[TileDefi
     paths = sorted(set(glob.glob(pattern_lower) + glob.glob(pattern_upper)))
 
     definitions: List[TileDefinition] = []
-    for stl_path in paths:
+    total = len(paths)
+    if progress_cb:
+        progress_cb(0, total)
+    for idx, stl_path in enumerate(paths):
         name = os.path.splitext(os.path.basename(stl_path))[0]
         try:
             m = stl_mesh.Mesh.from_file(stl_path)
@@ -233,6 +237,8 @@ def load_stl_folder(folder_path: str, errors: List[str] = None) -> List[TileDefi
                 errors.append(msg)
             else:
                 logger.warning("Skipping '%s'", msg)
+            if progress_cb:
+                progress_cb(idx + 1, total)
             continue
 
         color = TileDefinition.color_for_name(name)
@@ -247,5 +253,7 @@ def load_stl_folder(folder_path: str, errors: List[str] = None) -> List[TileDefi
             lod_triangles=lod_triangles,
             lod_tri_counts=lod_tri_counts,
         ))
+        if progress_cb:
+            progress_cb(idx + 1, total)
 
     return definitions

@@ -7,7 +7,7 @@ from PySide6.QtGui import QAction, QActionGroup, QImageReader
 from PySide6.QtWidgets import (
     QMainWindow, QSplitter, QFileDialog, QMessageBox, QStatusBar,
     QMenuBar, QDialog, QDialogButtonBox, QFormLayout, QSpinBox,
-    QDoubleSpinBox, QToolBar, QSlider, QLabel,
+    QDoubleSpinBox, QToolBar, QSlider, QLabel, QProgressDialog, QApplication,
 )
 
 from gui.style import WIN11_STYLESHEET, DARK_STYLESHEET
@@ -348,8 +348,25 @@ class MainWindow(QMainWindow):
         worker.finished.connect(lambda: self._cleanup_worker(worker))
         worker.failed.connect(lambda: self._cleanup_worker(worker))
         self._loading_workers.append(worker)
+
         if not silent:
-            self._status.showMessage(f"Loading {os.path.basename(folder)}…")
+            basename = os.path.basename(folder)
+            dlg = QProgressDialog(f"Loading '{basename}'…", "Cancel", 0, 0, self)
+            dlg.setWindowTitle("Loading STL Folder")
+            dlg.setWindowModality(Qt.WindowModal)
+            dlg.setMinimumDuration(0)
+            dlg.setValue(0)
+
+            def _on_progress(current: int, total: int) -> None:
+                dlg.setMaximum(total)
+                dlg.setValue(current)
+
+            worker.progress.connect(_on_progress)
+            worker.finished.connect(lambda *_: dlg.close())
+            worker.failed.connect(lambda *_: dlg.close())
+            dlg.canceled.connect(worker.cancel)
+            dlg.show()
+
         worker.start()
 
     def _on_folder_loaded(self, folder: str, definitions: list,
@@ -379,7 +396,7 @@ class MainWindow(QMainWindow):
     def _on_folder_load_failed(self, folder: str, error: str,
                                *, silent: bool = False) -> None:
         """Callback when a background folder load fails."""
-        if not silent:
+        if not silent and error != "Cancelled":
             QMessageBox.warning(self, "No STL files",
                                 f"No .stl files found in:\n{folder}\n\n{error}")
             self._update_status()
@@ -414,10 +431,26 @@ class MainWindow(QMainWindow):
         still_missing = [f for f in missing_folders if f not in remapping]
 
         resolved = present_folders + [remapping.get(f, f) for f in missing_folders]
-        for folder in resolved:
-            if os.path.isdir(folder):
+        valid_folders = [f for f in resolved if os.path.isdir(f)]
+        if valid_folders:
+            progress = QProgressDialog("Loading project…", None, 0, len(valid_folders), self)
+            progress.setWindowTitle("Opening Project")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setValue(0)
+            for i, folder in enumerate(valid_folders):
+                progress.setLabelText(f"Loading '{os.path.basename(folder)}'… ({i + 1}/{len(valid_folders)})")
+                progress.setValue(i)
+                QApplication.processEvents()
                 self._load_folder_sync(folder)
                 self._settings.add_folder(folder)
+            progress.setValue(len(valid_folders))
+            progress.close()
+        else:
+            for folder in resolved:
+                if os.path.isdir(folder):
+                    self._load_folder_sync(folder)
+                    self._settings.add_folder(folder)
 
         missing_tiles: list = []
         for rec in tile_records:

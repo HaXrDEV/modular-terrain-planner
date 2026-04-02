@@ -11,9 +11,9 @@ from typing import Optional, Tuple
 import numpy as np
 
 logger = logging.getLogger(__name__)
-from PyQt5.QtCore import Qt, QPoint
-from PyQt5.QtGui import QMatrix4x4, QVector3D
-from PyQt5.QtWidgets import QOpenGLWidget
+from PySide6.QtCore import Qt, QPoint
+from PySide6.QtGui import QMatrix4x4, QVector3D
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 try:
     from OpenGL.GL import (

@@ -22,10 +22,10 @@ from typing import Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 import numpy as np
-from PyQt5.QtCore import Qt, QPoint, QTimer, pyqtSignal
-from PyQt5.QtWidgets import QApplication
-from PyQt5.QtGui import QImage, QMatrix4x4, QVector3D, QVector4D
-from PyQt5.QtWidgets import QOpenGLWidget, QMessageBox
+from PySide6.QtCore import Qt, QPoint, QTimer, Signal
+from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtGui import QImage, QMatrix4x4, QVector3D, QVector4D
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 try:
     from OpenGL.GL import (
@@ -181,21 +181,21 @@ def _ray_triangles_min_t(origin: np.ndarray, direction: np.ndarray,
 # ---------------------------------------------------------------------------
 
 class GLGridView(QOpenGLWidget):
-    tile_place_requested       = pyqtSignal(float, float)
-    tile_remove_requested      = pyqtSignal(object)   # emits PlacedTile
-    tile_pickup_requested      = pyqtSignal(object)   # emits PlacedTile
-    tiles_move_requested       = pyqtSignal(object)   # emits list of (PlacedTile, new_gx, new_gy)
-    paste_place_requested      = pyqtSignal(float, float)  # cx, cy (snapped grid coords)
-    selection_delete_requested = pyqtSignal()
-    selection_rotate_requested = pyqtSignal()
-    rotate_requested           = pyqtSignal()
-    deselect_requested         = pyqtSignal()
-    hover_cell_changed         = pyqtSignal(int, int)
-    ground_image_rect_changed  = pyqtSignal(list)
-    ground_image_drag_started  = pyqtSignal()
-    select_all_requested       = pyqtSignal()
-    zoom_fit_requested         = pyqtSignal()   # F key
-    free_mode_changed          = pyqtSignal(bool)  # Ctrl held/released
+    tile_place_requested       = Signal(float, float)
+    tile_remove_requested      = Signal(object)   # emits PlacedTile
+    tile_pickup_requested      = Signal(object)   # emits PlacedTile
+    tiles_move_requested       = Signal(object)   # emits list of (PlacedTile, new_gx, new_gy)
+    paste_place_requested      = Signal(float, float)  # cx, cy (snapped grid coords)
+    selection_delete_requested = Signal()
+    selection_rotate_requested = Signal()
+    rotate_requested           = Signal()
+    deselect_requested         = Signal()
+    hover_cell_changed         = Signal(int, int)
+    ground_image_rect_changed  = Signal(list)
+    ground_image_drag_started  = Signal()
+    select_all_requested       = Signal()
+    zoom_fit_requested         = Signal()   # F key
+    free_mode_changed          = Signal(bool)  # Ctrl held/released
 
     def __init__(self, grid_model: GridModel, parent=None) -> None:
         super().__init__(parent)
@@ -1287,8 +1287,8 @@ class GLGridView(QOpenGLWidget):
         ndx = (2.0 * sx / w) - 1.0
         ndy = 1.0 - (2.0 * sy / h)
 
-        near4 = inv_pv * QVector4D(ndx, ndy, -1.0, 1.0)
-        far4  = inv_pv * QVector4D(ndx, ndy,  1.0, 1.0)
+        near4 = inv_pv.map(QVector4D(ndx, ndy, -1.0, 1.0))
+        far4  = inv_pv.map(QVector4D(ndx, ndy,  1.0, 1.0))
 
         near = QVector3D(near4.x() / near4.w(), near4.y() / near4.w(), near4.z() / near4.w())
         far  = QVector3D(far4.x()  / far4.w(),  far4.y()  / far4.w(),  far4.z()  / far4.w())
@@ -1355,8 +1355,8 @@ class GLGridView(QOpenGLWidget):
 
         ndx = (2.0 * sx / w) - 1.0
         ndy = 1.0 - (2.0 * sy / h)
-        near4 = inv_pv * QVector4D(ndx, ndy, -1.0, 1.0)
-        far4  = inv_pv * QVector4D(ndx, ndy,  1.0, 1.0)
+        near4 = inv_pv.map(QVector4D(ndx, ndy, -1.0, 1.0))
+        far4  = inv_pv.map(QVector4D(ndx, ndy,  1.0, 1.0))
         near = np.array([near4.x()/near4.w(), near4.y()/near4.w(), near4.z()/near4.w()])
         far  = np.array([far4.x()/far4.w(),   far4.y()/far4.w(),   far4.z()/far4.w()])
         ray_dir = far - near
@@ -1382,7 +1382,7 @@ class GLGridView(QOpenGLWidget):
 
             # Transform ray endpoints to local [0,1]³ space
             def _xform(v):
-                q = inv_model * QVector4D(v[0], v[1], v[2], 1.0)
+                q = inv_model.map(QVector4D(v[0], v[1], v[2], 1.0))
                 return np.array([q.x()/q.w(), q.y()/q.w(), q.z()/q.w()])
 
             lo = _xform(near)

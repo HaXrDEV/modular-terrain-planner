@@ -4,8 +4,8 @@ import math
 import os
 from typing import TYPE_CHECKING, List, Tuple
 
-from PyQt5.QtCore import Qt, QRect, QRectF, QPointF, QMarginsF, QSizeF
-from PyQt5.QtGui import (
+from PySide6.QtCore import Qt, QRect, QRectF, QPointF, QMarginsF, QSizeF
+from PySide6.QtGui import (
     QImage, QPainter, QColor, QFont, QPen, QBrush, QPolygonF, QFontMetrics,
     QPageLayout, QPageSize,
 )
@@ -357,7 +357,7 @@ def _render_pdf(
     title: str,
 ) -> None:
     """Render a combined PDF: page 1 = assembly map, page 2+ = placement table."""
-    from PyQt5.QtGui import QPdfWriter
+    from PySide6.QtGui import QPdfWriter
 
     map_img = _render_map_image(grid_model, placed_with_ids, title)
 

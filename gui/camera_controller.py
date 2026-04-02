@@ -8,8 +8,8 @@ a repaint. No OpenGL or widget code lives here.
 import math
 from typing import List
 
-from PyQt5.QtCore import QObject, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QMatrix4x4, QVector3D
+from PySide6.QtCore import QObject, QTimer, Qt, Signal
+from PySide6.QtGui import QMatrix4x4, QVector3D
 
 
 class CameraController(QObject):
@@ -22,7 +22,7 @@ class CameraController(QObject):
         widget's update() slot to schedule repaints.
     """
 
-    changed = pyqtSignal()
+    changed = Signal()
 
     # Defaults
     DEFAULT_AZ   = 45.0

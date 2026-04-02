@@ -45,7 +45,7 @@ class PlacedTile:
         Returns a QMatrix4x4 suitable for use as the model transform in all
         rendering and picking code paths.
         """
-        from PyQt5.QtGui import QMatrix4x4
+        from PySide6.QtGui import QMatrix4x4
         m = QMatrix4x4()
         m.translate(float(self.grid_x), float(self.grid_y), self.z_offset)
         m.scale(float(self.effective_w), float(self.effective_h),

@@ -4,12 +4,12 @@ Lets the user remap each missing folder to its new location before the project
 finishes loading — tiles from remapped folders are placed normally; anything
 still unresolved is reported by filename afterwards.
 """
-from PyQt5.QtWidgets import (
+from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy,
     QVBoxLayout, QWidget,
 )
-from PyQt5.QtCore import Qt
+from PySide6.QtCore import Qt
 
 
 class MissingFoldersDialog(QDialog):

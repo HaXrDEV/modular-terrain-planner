@@ -1,7 +1,7 @@
 """Background worker for loading ground image files off the main thread."""
 
-from PyQt5.QtCore import QThread, pyqtSignal
-from PyQt5.QtGui import QImage
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtGui import QImage
 
 
 class GroundImageWorker(QThread):
@@ -19,8 +19,8 @@ class GroundImageWorker(QThread):
         Emitted if the image could not be loaded.
     """
 
-    finished = pyqtSignal(str, int, int, bytes)   # path, w, h, raw RGBA bytes
-    failed   = pyqtSignal(str, str)               # path, error message
+    finished = Signal(str, int, int, bytes)   # path, w, h, raw RGBA bytes
+    failed   = Signal(str, str)               # path, error message
 
     def __init__(self, path: str, parent=None) -> None:
         super().__init__(parent)
@@ -35,7 +35,5 @@ class GroundImageWorker(QThread):
         if img.isNull():
             self.failed.emit(self._path, "Image could not be loaded")
             return
-        ptr = img.bits()
-        ptr.setsize(img.byteCount())
-        data = bytes(ptr)   # copy before QImage goes out of scope
+        data = bytes(img.bits())   # copy before QImage goes out of scope
         self.finished.emit(self._path, img.width(), img.height(), data)

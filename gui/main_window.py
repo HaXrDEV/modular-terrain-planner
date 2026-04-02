@@ -2,11 +2,11 @@ import math
 import os
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QImageReader
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction, QActionGroup, QImageReader
+from PySide6.QtWidgets import (
     QMainWindow, QSplitter, QFileDialog, QMessageBox, QStatusBar,
-    QAction, QActionGroup, QMenuBar, QDialog, QDialogButtonBox, QFormLayout, QSpinBox,
+    QMenuBar, QDialog, QDialogButtonBox, QFormLayout, QSpinBox,
     QDoubleSpinBox, QToolBar, QSlider, QLabel,
 )
 
@@ -408,7 +408,7 @@ class MainWindow(QMainWindow):
         remapping: dict = {}
         if missing_folders:
             dlg = MissingFoldersDialog(missing_folders, parent=self)
-            if dlg.exec_() == QDialog.Accepted:
+            if dlg.exec() == QDialog.Accepted:
                 remapping = dlg.remapping()
 
         still_missing = [f for f in missing_folders if f not in remapping]
@@ -766,7 +766,7 @@ class MainWindow(QMainWindow):
         if self._selected_definition is None:
             return
         self._snapshot()
-        from PyQt5.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication
         free = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
         igx, igy = int(math.floor(gx)), int(math.floor(gy))
         pt = PlacedTile(
@@ -1000,7 +1000,7 @@ class MainWindow(QMainWindow):
         buttons.rejected.connect(dlg.reject)
         layout.addRow(buttons)
 
-        if dlg.exec_() != QDialog.Accepted:
+        if dlg.exec() != QDialog.Accepted:
             return
 
         cols, rows = cols_spin.value(), rows_spin.value()
@@ -1039,7 +1039,7 @@ class MainWindow(QMainWindow):
         buttons.rejected.connect(dlg.reject)
         layout.addRow(buttons)
 
-        if dlg.exec_() != QDialog.Accepted:
+        if dlg.exec() != QDialog.Accepted:
             return
 
         speed = slider.value() * 0.001
@@ -1107,7 +1107,7 @@ class MainWindow(QMainWindow):
         buttons.rejected.connect(dlg.reject)
         layout.addRow(buttons)
 
-        if dlg.exec_() != QDialog.Accepted:
+        if dlg.exec() != QDialog.Accepted:
             return
 
         self._snapshot()
@@ -1162,7 +1162,7 @@ class MainWindow(QMainWindow):
         self._img_toolbar.show()
 
     def _apply_theme(self, theme: str) -> None:
-        from PyQt5.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication
         self._settings.theme = theme
         self._settings.save()
         # Resolve "auto" to the actual system preference

@@ -1,9 +1,9 @@
 import os
 from typing import List, Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPixmap, QIcon
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QPixmap, QIcon
+from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QListWidget, QListWidgetItem,
     QLabel, QSizePolicy, QTabWidget,
 )
@@ -13,10 +13,10 @@ from gui.tile_preview_widget import TilePreviewWidget
 
 
 class PalettePanel(QWidget):
-    tile_selected       = pyqtSignal(object)   # emits TileDefinition | None
-    load_folder_clicked = pyqtSignal()
-    export_clicked      = pyqtSignal()
-    tab_closed          = pyqtSignal(str)       # emits folder path
+    tile_selected       = Signal(object)   # emits TileDefinition | None
+    load_folder_clicked = Signal()
+    export_clicked      = Signal()
+    tab_closed          = Signal(str)       # emits folder path
 
     def __init__(self) -> None:
         super().__init__()

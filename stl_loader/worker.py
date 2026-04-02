@@ -2,7 +2,7 @@
 
 from typing import List
 
-from PyQt5.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 from models.tile_definition import TileDefinition
 from stl_loader.loader import load_stl_folder
@@ -19,8 +19,8 @@ class STLLoaderWorker(QThread):
         Emitted when loading fails entirely or finds no STL files.
     """
 
-    finished = pyqtSignal(str, list, list)  # (folder_path, definitions, errors)
-    failed   = pyqtSignal(str, str)         # (folder_path, error_message)
+    finished = Signal(str, list, list)  # (folder_path, definitions, errors)
+    failed   = Signal(str, str)         # (folder_path, error_message)
 
     def __init__(self, folder: str, parent=None) -> None:
         super().__init__(parent)

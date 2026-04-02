@@ -981,19 +981,43 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_grid_size(self) -> None:
+        from PySide6.QtWidgets import QHBoxLayout, QWidget
+
         dlg = QDialog(self)
         dlg.setWindowTitle("Grid Size")
         layout = QFormLayout(dlg)
 
-        cols_spin = QSpinBox()
-        cols_spin.setRange(1, 200)
-        cols_spin.setValue(self._model.GRID_COLS)
-        layout.addRow("Columns:", cols_spin)
+        def _make_slider_row(current: int):
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(8)
 
-        rows_spin = QSpinBox()
-        rows_spin.setRange(1, 200)
-        rows_spin.setValue(self._model.GRID_ROWS)
-        layout.addRow("Rows:", rows_spin)
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(1, 200)
+            slider.setValue(min(current, 200))
+            slider.setFixedWidth(220)
+
+            spin = QSpinBox()
+            spin.setRange(1, 9999)
+            spin.setValue(current)
+            spin.setFixedWidth(75)
+            spin.setButtonSymbols(QSpinBox.NoButtons)
+
+            # Slider -> spin: only when user drags, avoids feedback loop
+            slider.sliderMoved.connect(spin.setValue)
+            # Spin -> slider: clamp to slider range, won't re-trigger sliderMoved
+            spin.valueChanged.connect(lambda v: slider.setValue(min(v, 200)))
+
+            h.addWidget(slider)
+            h.addWidget(spin)
+            return row, spin
+
+        cols_row, cols_spin = _make_slider_row(self._model.GRID_COLS)
+        layout.addRow("Columns:", cols_row)
+
+        rows_row, rows_spin = _make_slider_row(self._model.GRID_ROWS)
+        layout.addRow("Rows:", rows_row)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dlg.accept)

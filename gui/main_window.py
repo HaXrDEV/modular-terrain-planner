@@ -301,7 +301,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _restore_session(self) -> None:
-        """Silently reload folders from the last session."""
+        """Reload folders from the last session, showing a progress dialog."""
         missing: List[str] = []
         present: List[str] = []
         for folder in self._settings.recent_folders:
@@ -347,12 +347,6 @@ class MainWindow(QMainWindow):
     # Project helpers
     # ------------------------------------------------------------------
 
-    def _load_folder_silent(self, folder: str) -> None:
-        """Start loading a folder in the background (no error dialog on failure)."""
-        if folder in self._loaded_folders:
-            return
-        self._start_folder_load(folder, silent=True)
-
     def _load_folder_sync(self, folder: str) -> None:
         """Load a folder synchronously (blocks until done).
 
@@ -370,34 +364,32 @@ class MainWindow(QMainWindow):
             return
         self._on_folder_loaded(folder, definitions, errors, silent=True)
 
-    def _start_folder_load(self, folder: str, *, silent: bool = False) -> None:
+    def _start_folder_load(self, folder: str) -> None:
         """Launch a background worker to load *folder*."""
         worker = STLLoaderWorker(folder, parent=self)
         worker.finished.connect(
-            lambda f, defs, errs: self._on_folder_loaded(f, defs, errs, silent=silent))
-        worker.failed.connect(
-            lambda f, err: self._on_folder_load_failed(f, err, silent=silent))
+            lambda f, defs, errs: self._on_folder_loaded(f, defs, errs))
+        worker.failed.connect(self._on_folder_load_failed)
         worker.finished.connect(lambda: self._cleanup_worker(worker))
         worker.failed.connect(lambda: self._cleanup_worker(worker))
         self._loading_workers.append(worker)
 
-        if not silent:
-            basename = os.path.basename(folder)
-            dlg = QProgressDialog(f"Loading '{basename}'…", "Cancel", 0, 0, self)
-            dlg.setWindowTitle("Loading STL Folder")
-            dlg.setWindowModality(Qt.WindowModal)
-            dlg.setMinimumDuration(0)
-            dlg.setValue(0)
+        basename = os.path.basename(folder)
+        dlg = QProgressDialog(f"Loading '{basename}'…", "Cancel", 0, 0, self)
+        dlg.setWindowTitle("Loading STL Folder")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setValue(0)
 
-            def _on_progress(current: int, total: int) -> None:
-                dlg.setMaximum(total)
-                dlg.setValue(current)
+        def _on_progress(current: int, total: int) -> None:
+            dlg.setMaximum(total)
+            dlg.setValue(current)
 
-            worker.progress.connect(_on_progress)
-            worker.finished.connect(lambda *_: dlg.close())
-            worker.failed.connect(lambda *_: dlg.close())
-            dlg.canceled.connect(worker.cancel)
-            dlg.show()
+        worker.progress.connect(_on_progress)
+        worker.finished.connect(lambda *_: dlg.close())
+        worker.failed.connect(lambda *_: dlg.close())
+        dlg.canceled.connect(worker.cancel)
+        dlg.show()
 
         worker.start()
 
@@ -425,10 +417,9 @@ class MainWindow(QMainWindow):
                 f"{len(errors)} file(s) in '{basename}' could not be loaded:\n\n{detail}"
             )
 
-    def _on_folder_load_failed(self, folder: str, error: str,
-                               *, silent: bool = False) -> None:
+    def _on_folder_load_failed(self, folder: str, error: str) -> None:
         """Callback when a background folder load fails."""
-        if not silent and error != "Cancelled":
+        if error != "Cancelled":
             QMessageBox.warning(self, "No STL files",
                                 f"No .stl files found in:\n{folder}\n\n{error}")
             self._update_status()
@@ -478,11 +469,6 @@ class MainWindow(QMainWindow):
                 self._settings.add_folder(folder)
             progress.setValue(len(valid_folders))
             progress.close()
-        else:
-            for folder in resolved:
-                if os.path.isdir(folder):
-                    self._load_folder_sync(folder)
-                    self._settings.add_folder(folder)
 
         missing_tiles: list = []
         for rec in tile_records:
@@ -764,7 +750,7 @@ class MainWindow(QMainWindow):
         if folder in self._loaded_folders:
             self._palette.focus_folder_tab(folder)
             return
-        self._start_folder_load(folder, silent=False)
+        self._start_folder_load(folder)
 
     def _on_tab_closed(self, folder_path: str) -> None:
         stl_paths = self._loaded_folders.pop(folder_path, [])

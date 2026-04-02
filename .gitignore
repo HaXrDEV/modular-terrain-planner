@@ -27,3 +27,6 @@ Thumbs.db
 build/
 dist/
 *.spec
+
+# Generated build artefacts
+gui/icons/app_icon.ico

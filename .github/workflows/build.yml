@@ -28,7 +28,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller pillow
+
+      - name: Generate ICO
+        run: python build_icon.py
 
       - name: Build EXE
         run: >
@@ -37,6 +40,8 @@ jobs:
           --windowed
           --noconfirm
           --name "DungeonDesigner-${{ env.VERSION }}"
+          --icon gui/icons/app_icon.ico
+          --add-data "gui/icons/app_icon.svg;gui/icons"
           --hidden-import PySide6.QtSvg
           --hidden-import PySide6.QtOpenGL
           --hidden-import PySide6.QtOpenGLWidgets

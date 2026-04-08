@@ -120,6 +120,14 @@ class MainWindow(QMainWindow):
         self._view.set_pan_speed(self._settings.pan_speed)
         self._apply_theme(self._settings.theme)
 
+        # Re-apply theme when the OS colour scheme changes at runtime
+        try:
+            QApplication.instance().styleHints().colorSchemeChanged.connect(
+                self._on_system_theme_changed
+            )
+        except AttributeError:
+            pass  # Qt < 6.5
+
         self._update_title()
         self._update_status()
 
@@ -1259,6 +1267,10 @@ class MainWindow(QMainWindow):
             grid      = (0.68, 0.68, 0.72)   # visible but soft
         self._view.set_background_color(r, g, b, ground=ground, grid=grid)
         self._palette.set_preview_background(r, g, b)
+
+    def _on_system_theme_changed(self) -> None:
+        if self._settings.theme == "auto":
+            self._apply_theme("auto")
 
     def _on_free_mode_changed(self, free: bool) -> None:
         self._free_mode = free

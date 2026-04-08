@@ -27,7 +27,21 @@ class AppSettings:
 
     @staticmethod
     def _system_theme() -> str:
-        """Return 'dark' if Windows is set to dark mode, else 'light'."""
+        """Return 'dark' or 'light' based on the OS colour-scheme preference."""
+        # Try Qt's cross-platform colour-scheme hint first (Qt 6.5+)
+        try:
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtCore import Qt
+            app = QApplication.instance()
+            if app is not None:
+                scheme = app.styleHints().colorScheme()
+                if scheme == Qt.ColorScheme.Dark:
+                    return "dark"
+                if scheme == Qt.ColorScheme.Light:
+                    return "light"
+        except (ImportError, AttributeError):
+            pass
+        # Windows registry fallback for older Qt builds
         if sys.platform == "win32":
             try:
                 import winreg

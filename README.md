@@ -22,9 +22,19 @@ A desktop tool for designing tabletop RPG dungeon layouts by placing modular ter
 
 ## Getting Started
 
-### Portable EXE (easiest)
+### Portable binary (easiest)
 
-Download `DungeonDesigner-<version>.exe` from the [latest release](../../releases/latest) — no Python or dependencies required. Windows may show a SmartScreen warning on first run; click *More info → Run anyway*.
+Download the binary for your platform from the [latest release](../../releases/latest) — no Python or dependencies required.
+
+| Platform | File                              |
+|----------|-----------------------------------|
+| Windows  | `DungeonDesigner-<version>.exe`   |
+| macOS    | `DungeonDesigner-<version>-mac`   |
+| Linux    | `DungeonDesigner-<version>-linux` |
+
+**Windows:** SmartScreen may warn on first run — click *More info → Run anyway*.
+
+**macOS / Linux:** Make the binary executable before running: `chmod +x DungeonDesigner-*`. On macOS, Gatekeeper may block the unsigned binary — right-click → *Open* to bypass.
 
 ### From source
 

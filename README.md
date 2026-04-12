@@ -44,6 +44,15 @@ PyOpenGL >= 3.1, < 4
 2. Install all dependencies into it
 3. Launch the application
 
+**Linux / macOS** — run **`launch.sh`** from a terminal:
+
+```bash
+chmod +x launch.sh   # first run only
+./launch.sh
+```
+
+It does the same three steps as the Windows launcher.
+
 ### Manual
 
 ```bash
@@ -93,6 +102,7 @@ python main.py
 .
 ├── main.py                  # Entry point, sets up OpenGL surface format
 ├── launch.bat               # Windows launcher (venv + dependency bootstrap)
+├── launch.sh                # Linux / macOS launcher (venv + dependency bootstrap)
 ├── requirements.txt
 ├── models/
 │   ├── tile_definition.py   # TileDefinition dataclass (name, size, mesh data)
@@ -127,9 +137,11 @@ python main.py
 
 Warnings and errors are written to:
 
-```text
-%USERPROFILE%\.modular-terrain-planner\app.log
-```
+| Platform | Path                                             |
+|----------|--------------------------------------------------|
+| Windows  | `%USERPROFILE%\.modular-terrain-planner\app.log` |
+| Linux    | `~/.modular-terrain-planner/app.log`             |
+| macOS    | `~/.modular-terrain-planner/app.log`             |
 
 This file is created automatically on first launch and is useful for diagnosing STL load failures or OpenGL errors when running as the portable EXE (where no console is available).
 
